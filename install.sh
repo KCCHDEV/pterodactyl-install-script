@@ -211,15 +211,57 @@ main_menu() {
         echo "  Pterodactyl Panel - Main Menu"
         echo "=============================================="
         echo ""
-        echo "  [1] Fresh Install    - Full panel installation"
-        echo "  [2] Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
-        echo "  [3] Install Wings    - Add Wings daemon (game servers)"
-        echo "  [4] Fix Panel        - Fix 500 error, permissions, cache"
-        echo "  [5] Exit"
+        echo "  [1] Fresh Install      - Full panel installation"
+        echo "  [2] Switch Mode        - Change HTTP / HTTPS / CF Tunnel"
+        echo "  [3] Install Wings      - Add Wings daemon (game servers)"
+        echo "  [4] Fix Panel          - Fix 500 error, permissions, cache"
+        echo "  [5] Remove             - Uninstall panel, wings, database"
+        echo "  [6] Remove and Install - Uninstall then fresh install"
+        echo "  [7] Exit"
         echo ""
     } >&2
-    prompt_read "Enter 1-5: "
+    prompt_read "Enter 1-7: "
     echo "${REPLY:-1}"
+}
+
+run_remove() {
+    if [[ -f "$INSTALLER_ROOT/uninstall.sh" ]]; then
+        bash "$INSTALLER_ROOT/uninstall.sh"
+    elif [[ -f /opt/pterodactyl-install-script/uninstall.sh ]]; then
+        bash /opt/pterodactyl-install-script/uninstall.sh
+    else
+        log_error "uninstall.sh not found. Run: curl -sSL ... | sudo bash"
+        exit 1
+    fi
+}
+
+run_remove_and_install() {
+    if ! is_panel_installed; then
+        log_info "Panel not installed. Running Fresh Install..."
+        run_install
+        return 0
+    fi
+    {
+        echo ""
+        log_warn "This will REMOVE everything (panel, wings, database) then do Fresh Install."
+        echo ""
+    } >&2
+    prompt_read "Continue? [y/N]: "
+    if [[ "${REPLY:-n}" != "y" && "${REPLY:-n}" != "Y" ]]; then
+        log_info "Cancelled."
+        return 0
+    fi
+    local uninstall_script
+    uninstall_script="$INSTALLER_ROOT/uninstall.sh"
+    [[ ! -f "$uninstall_script" ]] && uninstall_script="/opt/pterodactyl-install-script/uninstall.sh"
+    if [[ -f "$uninstall_script" ]]; then
+        echo "yes" | bash "$uninstall_script"
+    else
+        run_remove
+    fi
+    echo ""
+    log_info "Starting Fresh Install..."
+    run_install
 }
 
 run_switch_mode() {
@@ -498,7 +540,9 @@ run_main() {
             2) run_switch_mode ;;
             3) run_install_wings_only; break ;;
             4) run_fix_panel ;;
-            5) log_info "Exit"; exit 0 ;;
+            5) run_remove; break ;;
+            6) run_remove_and_install; break ;;
+            7) log_info "Exit"; exit 0 ;;
             *) run_install; break ;;  # Default to fresh install for non-interactive
         esac
     done
