@@ -83,16 +83,16 @@ prompt_inputs() {
 
     echo ""
     echo "Install Mode:"
-    echo "  1) HTTP  - Development, no SSL"
-    echo "  2) HTTPS - Let's Encrypt SSL (domain must point to this server)"
-    echo "  3) Cloudflare Tunnel - No port open, use trycloudflare.com or your domain"
-    prompt_read "Choice [1-3]: "
+    echo "  [1] HTTP  - Development, no SSL"
+    echo "  [2] HTTPS - Let's Encrypt SSL (domain must point to this server)"
+    echo "  [3] Cloudflare Tunnel - No port open, use trycloudflare.com or your domain"
+    prompt_read "Enter 1-3: "
     INSTALL_MODE="${REPLY:-1}"
 
     if [[ "$INSTALL_MODE" == "3" ]]; then
-        echo "  a) Quick Tunnel - Free, no account, get xxx.trycloudflare.com URL"
-        echo "  b) Named Tunnel - Use your domain, requires Cloudflare account"
-        prompt_read "CF Tunnel type [a/b]: "
+        echo "  [a] Quick Tunnel - Free, no account, get xxx.trycloudflare.com URL"
+        echo "  [b] Named Tunnel - Use your domain, requires Cloudflare account"
+        prompt_read "Enter a or b: "
         CF_TUNNEL_TYPE="${REPLY:-a}"
     fi
 
@@ -185,12 +185,12 @@ main_menu() {
     echo "  Pterodactyl Panel - Main Menu"
     echo "=============================================="
     echo ""
-    echo "  1) Fresh Install    - Full panel installation"
-    echo "  2) Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
-    echo "  3) Install Wings    - Add Wings daemon (game servers)"
-    echo "  4) Exit"
+    echo "  [1] Fresh Install    - Full panel installation"
+    echo "  [2] Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
+    echo "  [3] Install Wings    - Add Wings daemon (game servers)"
+    echo "  [4] Exit"
     echo ""
-    prompt_read "Choice [1-4]: "
+    prompt_read "Enter 1-4: "
     echo "${REPLY:-1}"
 }
 
@@ -217,21 +217,21 @@ run_switch_mode() {
     echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
     echo ""
     echo "  Switch to:"
-    echo "  1) HTTP  - Development, no SSL"
-    echo "  2) HTTPS - Let's Encrypt SSL"
-    echo "  3) Cloudflare Tunnel"
-    echo "  4) Back to main menu"
+    echo "  [1] HTTP  - Development, no SSL"
+    echo "  [2] HTTPS - Let's Encrypt SSL"
+    echo "  [3] Cloudflare Tunnel"
+    echo "  [4] Back to main menu"
     echo ""
-    prompt_read "Choice [1-4]: "
+    prompt_read "Enter 1-4: "
     local choice="${REPLY:-4}"
 
     case "$choice" in
         1) switch_to_http ;;
         2) switch_to_https ;;
         3)
-            echo "  a) Quick Tunnel (trycloudflare.com)"
-            echo "  b) Named Tunnel (your domain)"
-            prompt_read "CF type [a/b]: "
+            echo "  [a] Quick Tunnel (trycloudflare.com)"
+            echo "  [b] Named Tunnel (your domain)"
+            prompt_read "Enter a or b: "
             switch_to_cftunnel "${REPLY:-a}"
             ;;
         4) return 0 ;;
