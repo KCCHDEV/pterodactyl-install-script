@@ -166,8 +166,8 @@ remove_settings_json() {
 }
 
 remove_installer_copy() {
-    if [[ -d /opt/ptero-panel-installer ]]; then
-        rm -rf /opt/ptero-panel-installer
+    if [[ -d /opt/pterodactyl-install-script ]]; then
+        rm -rf /opt/pterodactyl-install-script
         log_success "Installer copy removed from /opt"
     fi
 }

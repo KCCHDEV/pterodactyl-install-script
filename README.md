@@ -1,20 +1,91 @@
-# Pterodactyl Panel Auto Installer
+<div align="center">
 
-ชุดสคริปต์สำหรับติดตั้ง Pterodactyl Panel แบบอัตโนมัติ กรอกข้อมูลครั้งเดียว แล้วระบบจะติดตั้งจนใช้งานได้ทันที
+# 🦖 Pterodactyl Panel Auto Installer
 
-## ความต้องการของระบบ
+**One-Click Setup | กรอกครั้งเดียว แล้วปล่อยให้ระบบจัดการให้**
 
-- **OS**: Ubuntu 22.04/24.04, Debian 11/12
-- **สิทธิ์**: Root (sudo)
-- **พื้นที่**: อย่างน้อย 5GB
-- **เครือข่าย**: เปิด port 80, 443 (สำหรับ HTTP/HTTPS) หรือใช้ Cloudflare Tunnel ไม่ต้องเปิด port
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/Platform-Ubuntu%2022.04%20%7C%20Debian%2011+-blue)](https://ubuntu.com)
+[![Shell](https://img.shields.io/badge/Shell-Bash-green)](https://www.gnu.org/software/bash/)
 
-## โครงสร้างไฟล์
+*ติดตั้ง Pterodactyl Panel แบบอัตโนมัติ — HTTP, HTTPS หรือ Cloudflare Tunnel เลือกได้ตามใจ*
+
+</div>
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|--------|-------------|
+| 🚀 **One-Time Input** | กรอกข้อมูลครั้งเดียว — ที่เหลือให้สคริปต์จัดการ |
+| 🔐 **3 Modes** | HTTP / HTTPS (Let's Encrypt) / Cloudflare Tunnel |
+| 🎮 **Wings Optional** | เลือกได้ว่าจะติดตั้ง game server daemon หรือไม่ |
+| 📦 **Curated** | ตั้งค่าทุกอย่างให้ — พร้อมใช้ทันที |
+| 🧹 **Maintenance** | มี uninstall + cleaner ในชุด |
+| 📄 **JSON Config** | บันทึก settings อัตโนมัติ ไว้ใช้ต่อได้ง่าย |
+
+---
+
+## 🚀 Quick Start
+
+```bash
+curl -sSL https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/refs/heads/main/install.sh | sudo bash
+```
+
+**หรือ**
+
+```bash
+git clone https://github.com/KCCHDEV/pterodactyl-install-script.git
+cd pterodactyl-install-script
+sudo ./install.sh
+```
+
+> **หมายเหตุ:** Raw URL แบบสั้น: `https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/main/install.sh` ใช้ได้เหมือนกัน
+
+---
+
+## 📋 Requirements
+
+| Item | Specification |
+|------|---------------|
+| **OS** | Ubuntu 22.04/24.04, Debian 11/12 |
+| **Privilege** | Root (sudo) |
+| **Disk** | ≥ 5GB |
+| **Network** | Port 80, 443 (หรือใช้ CF Tunnel ไม่ต้องเปิด port) |
+
+---
+
+## 📖 Installation Modes
+
+| Mode | Use Case | SSL |
+|------|----------|-----|
+| **1 - HTTP** | Development / ทดสอบ | ❌ |
+| **2 - HTTPS** | Production (Let's Encrypt) | ✅ Auto |
+| **3 - CF Tunnel** | Quick (`xxx.trycloudflare.com`) หรือ Named (domain ของคุณ) | ✅ |
+
+---
+
+## 🎯 Input Prompts
+
+ตอนติดตั้งจะถาม:
+
+- **FQDN** — domain เช่น `panel.example.com` หรือ `localhost`
+- **Admin Email** — สำหรับ admin + SSL
+- **Admin Password** — ขั้นต่ำ 8 ตัว
+- **Install Mode** — 1, 2 หรือ 3
+- **DB Password** — กด Enter เพื่อ auto-generate
+- **Install Wings?** — Y/n (ตัวเลือก game server daemon)
+
+---
+
+## 🗂 Project Structure
 
 ```
-├── install.sh       # ติดตั้งหลัก
-├── uninstall.sh     # ลบการติดตั้ง
-├── cleaner.sh       # ทำความสะอาด logs/cache
+pterodactyl-install-script/
+├── install.sh        # Main installer
+├── uninstall.sh      # Uninstall
+├── cleaner.sh        # Logs/cache cleanup
 ├── lib/
 │   ├── common.sh
 │   ├── dependencies.sh
@@ -25,99 +96,72 @@
 └── README.md
 ```
 
-## การใช้งาน
+---
 
-### ติดตั้ง
+## 🧹 Uninstall & Cleaner
 
-```bash
-# รันผ่าน curl จาก GitHub
-curl -sSL https://raw.githubusercontent.com/naygolf/ptero-panel-installer/main/install.sh | sudo bash
-
-# หรือ clone แล้วรัน
-git clone https://github.com/naygolf/ptero-panel-installer.git
-cd ptero-panel-installer
-sudo ./install.sh
-```
-
-กรอกข้อมูลเมื่อถาม:
-- **FQDN**: domain เช่น panel.example.com (หรือ localhost สำหรับทดสอบ)
-- **Admin Email**: อีเมลผู้ดูแล
-- **Admin Password**: รหัสผ่าน (ขั้นต่ำ 8 ตัว)
-- **Install Mode**: 1=HTTP, 2=HTTPS, 3=Cloudflare Tunnel
-- **DB Password**: Enter เพื่อสร้างอัตโนมัติ
-- **Install Wings**: Y/n (ตัวเลือกเพิ่มเติม สำหรับ game server daemon)
-
-### โหมดการติดตั้ง
-
-| โหมด | คำอธิบาย |
-|------|----------|
-| 1 - HTTP | สำหรับพัฒนา ไม่มี SSL |
-| 2 - HTTPS | Let's Encrypt SSL (domain ต้องชี้มาที่ server นี้) |
-| 3 - CF Tunnel | Quick Tunnel (ได้ xxx.trycloudflare.com) หรือ Named Tunnel (ใช้ domain ของคุณ) |
-
-### ลบการติดตั้ง
+### Uninstall
 
 ```bash
-# หลังติดตั้งผ่าน curl - installer ถูก copy ไปที่ /opt
 sudo /opt/ptero-panel-installer/uninstall.sh
-
-# หรือถ้า clone repo มา
+# หรือ
 sudo ./uninstall.sh
 ```
 
-พิมพ์ `yes` หรือ domain ของ panel เพื่อยืนยัน
+พิมพ์ `yes` หรือ domain เพื่อยืนยัน
 
-### ทำความสะอาด
+### Cleaner
 
 ```bash
 # หลังติดตั้งผ่าน curl
-sudo /opt/ptero-panel-installer/cleaner.sh logs
+sudo /opt/pterodactyl-install-script/cleaner.sh logs
 
-# หรือถ้า clone repo มา
-sudo ./cleaner.sh logs
-
-# ล้าง cache
-sudo ./cleaner.sh cache
-
-# ลบ temp files
-sudo ./cleaner.sh temp
-
-# ทำทั้งหมด
-sudo ./cleaner.sh all
-
-# ดูว่าจะลบอะไร (ไม่ลบจริง)
-sudo ./cleaner.sh logs --dry-run
-
-# เก็บ logs 14 วัน
+# หรือ clone repo มา
+sudo ./cleaner.sh logs           # ลบ logs เก่า
+sudo ./cleaner.sh cache          # ล้าง cache
+sudo ./cleaner.sh temp           # ลบ temp
+sudo ./cleaner.sh all            # ทำทั้งหมด
+sudo ./cleaner.sh logs --dry-run # ดูว่าจะลบอะไร (ไม่ลบจริง)
 sudo ./cleaner.sh logs --keep-days 14
 ```
 
-## หลังติดตั้ง
+---
 
-1. Login ที่ Panel URL ด้วย admin / (รหัสที่ตั้ง)
-2. สร้าง **Location** ที่ Nodes > Locations
-3. สร้าง **Node** ที่ Nodes > Create
-   - FQDN: ชื่อ server หรือ IP
-   - ตั้ง Memory, Disk ตามต้องการ
-4. ไปที่แท็บ **Configuration** ของ Node แล้ว copy คำสั่ง deployment
-5. รันคำสั่งนั้นบน server เพื่อตั้งค่า Wings
-6. เริ่ม Wings: `sudo systemctl start wings`
+## 📄 Settings JSON
 
-## Settings JSON
+หลังติดตั้งเสร็จ:
 
-หลังติดตั้งเสร็จ ระบบจะบันทึกการตั้งค่าไว้ที่ `/root/pterodactyl-settings.json`:
+- **Path:** `/root/pterodactyl-settings.json`
+- **ใช้เก็บ:** fqdn, admin_email, install_mode, db_name, panel_url, wings_installed ฯลฯ
+- **ปลอดภัย:** ไม่เก็บรหัสผ่าน — ใช้ credentials file แยก
+- **ใช้โดย:** uninstall.sh, cleaner.sh
 
-- `fqdn`, `admin_email`, `install_mode`, `db_name`, `panel_url`, `wings_installed` ฯลฯ
-- ไม่เก็บรหัสผ่านในไฟล์นี้ (เก็บใน credentials file แยก)
-- ใช้โดย uninstall.sh และ cleaner.sh เพื่ออ่าน config
+---
 
-## หมายเหตุ
+## 📌 Post-Install
 
-- **Wings (ตัวเลือก)**: เลือก n ถ้าต้องการแค่ Panel เท่านั้น (ไม่ติดตั้ง Docker)
-- **Wings**: จะยังไม่ start อัตโนมัติจนกว่าจะสร้าง Node ใน Panel และรัน deployment command
-- **Cloudflare Quick Tunnel**: URL จะเปลี่ยนทุกครั้งที่ restart
-- **HTTPS**: domain ต้องชี้มาที่ IP ของ server ก่อนรัน Certbot
+1. เข้า Panel ด้วย admin / (รหัสที่ตั้ง)
+2. สร้าง **Location** (Nodes → Locations)
+3. สร้าง **Node** (Nodes → Create) — ตั้ง FQDN, Memory, Disk
+4. Tab **Configuration** → copy คำสั่ง deployment
+5. รันบน server เพื่อตั้งค่า Wings
+6. `sudo systemctl start wings`
 
-## License
+---
 
-MIT
+## ⚠️ Notes
+
+- **Wings Optional** — เลือก `n` ถ้าต้องการแค่ Panel (ไม่ติดตั้ง Docker)
+- **Wings** — ไม่ start อัตโนมัติจนกว่าจะสร้าง Node และรัน deployment
+- **CF Quick Tunnel** — URL เปลี่ยนทุกครั้งที่ restart
+- **HTTPS** — domain ต้องชี้มาที่ server ก่อนรัน Certbot
+
+---
+
+<div align="center">
+
+**License:** MIT
+
+Made with ❤️ for Pterodactyl Community
+
+</div>

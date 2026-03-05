@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Pterodactyl Panel Auto Installer
 # One-time input, then full automatic installation
-# Run via: curl -sSL https://raw.githubusercontent.com/USERNAME/ptero-panel-installer/main/install.sh | sudo bash
+# Run via: curl -sSL https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/refs/heads/main/install.sh | sudo bash
 
 set -e
 
-GITHUB_REPO="https://github.com/naygolf/ptero-panel-installer"
+GITHUB_REPO="https://github.com/KCCHDEV/pterodactyl-install-script"
 get_script_dir() {
     if [[ -n "${BASH_SOURCE[0]}" && -f "${BASH_SOURCE[0]}" ]]; then
         cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
@@ -18,7 +18,7 @@ if [[ -z "$SCRIPT_DIR" || ! -d "$SCRIPT_DIR/lib" ]]; then
     log_bootstrap() { echo "[INFO] $*"; }
     log_bootstrap "Downloading installer from GitHub..."
     TMP_DIR=$(mktemp -d)
-    curl -sSL "${GITHUB_REPO}/archive/refs/heads/main.tar.gz" | tar xz -C "$TMP_DIR"
+    curl -sSL "${GITHUB_REPO}/archive/main.tar.gz" | tar xz -C "$TMP_DIR"
     EXTRACTED=$(ls -d "$TMP_DIR"/*/ 2>/dev/null | head -1)
     if [[ -n "$EXTRACTED" && -d "$EXTRACTED" ]]; then
         exec bash "$EXTRACTED/install.sh"
@@ -264,9 +264,9 @@ run_install() {
 
     # Copy installer to /opt for uninstall/cleaner access
     if [[ -d "$SCRIPT_DIR/lib" ]]; then
-        mkdir -p /opt/ptero-panel-installer
-        cp -r "$SCRIPT_DIR"/* /opt/ptero-panel-installer/ 2>/dev/null || true
-        chmod +x /opt/ptero-panel-installer/*.sh 2>/dev/null || true
+        mkdir -p /opt/pterodactyl-install-script
+        cp -r "$SCRIPT_DIR"/* /opt/pterodactyl-install-script/ 2>/dev/null || true
+        chmod +x /opt/pterodactyl-install-script/*.sh 2>/dev/null || true
     fi
 
     echo ""
@@ -276,7 +276,7 @@ run_install() {
     echo ""
     echo "Panel URL: $FINAL_PANEL_URL"
     echo "Settings: $SETTINGS_JSON_PATH"
-    echo "Uninstall: sudo /opt/ptero-panel-installer/uninstall.sh"
+    echo "Uninstall: sudo /opt/pterodactyl-install-script/uninstall.sh"
     echo ""
     echo "Next steps:"
     echo "  1. Login with admin / (your password)"
