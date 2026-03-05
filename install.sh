@@ -147,21 +147,21 @@ fix_db_user() {
     mysql -e "DROP USER IF EXISTS '$DB_USER'@'127.0.0.1';" 2>/dev/null || true
     mysql -e "CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
     mysql -e "CREATE USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';"
-    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
-    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';"
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost' WITH GRANT OPTION;"
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1' WITH GRANT OPTION;"
     mysql -e "FLUSH PRIVILEGES;"
     log_success "Database user fixed"
 }
 
 create_database() {
-    log_info "Creating database and user..."
+    log_info "Creating database and user (per Pterodactyl doc)..."
     mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;" 2>/dev/null || true
     mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
     mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
     mysql -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
     mysql -e "ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
-    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
-    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';"
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost' WITH GRANT OPTION;"
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1' WITH GRANT OPTION;"
     mysql -e "FLUSH PRIVILEGES;"
 
     if ! verify_db_connection; then
@@ -214,10 +214,11 @@ main_menu() {
         echo "  [1] Fresh Install    - Full panel installation"
         echo "  [2] Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
         echo "  [3] Install Wings    - Add Wings daemon (game servers)"
-        echo "  [4] Exit"
+        echo "  [4] Fix Panel        - Fix 500 error, permissions, cache"
+        echo "  [5] Exit"
         echo ""
     } >&2
-    prompt_read "Enter 1-4: "
+    prompt_read "Enter 1-5: "
     echo "${REPLY:-1}"
 }
 
@@ -297,6 +298,46 @@ run_install_wings_only() {
     fi
 
     log_success "Wings installed. Configure node in Panel -> Configuration"
+    echo ""
+}
+
+run_fix_panel() {
+    if ! is_panel_installed; then
+        log_error "Panel not installed. Run Fresh Install first."
+        exit 1
+    fi
+
+    local panel_path
+    panel_path=$(get_json_value "$SETTINGS_JSON_PATH" "panel_path")
+    panel_path="${panel_path:-/var/www/pterodactyl}"
+
+    if [[ ! -d "$panel_path" ]]; then
+        log_error "Panel path not found: $panel_path"
+        exit 1
+    fi
+
+    log_info "Fixing panel (500 error, permissions, cache)..."
+
+    cd "$panel_path" || exit 1
+
+    log_info "Setting permissions..."
+    chown -R www-data:www-data "$panel_path"
+    chmod -R 755 "$panel_path"
+    chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
+    log_info "Clearing cache..."
+    sudo -u www-data php artisan config:clear 2>/dev/null || true
+    sudo -u www-data php artisan cache:clear 2>/dev/null || true
+    sudo -u www-data php artisan view:clear 2>/dev/null || true
+
+    log_info "Creating storage link..."
+    sudo -u www-data php artisan storage:link 2>/dev/null || true
+
+    log_info "Restarting services..."
+    systemctl restart pteroq 2>/dev/null || true
+    systemctl restart nginx 2>/dev/null || true
+
+    log_success "Panel fixed. Try refreshing the page."
     echo ""
 }
 
@@ -456,7 +497,8 @@ run_main() {
             1) run_install; break ;;
             2) run_switch_mode ;;
             3) run_install_wings_only; break ;;
-            4) log_info "Exit"; exit 0 ;;
+            4) run_fix_panel ;;
+            5) log_info "Exit"; exit 0 ;;
             *) run_install; break ;;  # Default to fresh install for non-interactive
         esac
     done

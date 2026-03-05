@@ -85,7 +85,13 @@ install_nginx() {
 }
 
 install_redis() {
-    log_info "Installing Redis..."
+    log_info "Installing Redis (official repo per Pterodactyl doc)..."
+    local redis_dist
+    redis_dist=$(lsb_release -cs 2>/dev/null || echo "bookworm")
+    [[ "$redis_dist" == "trixie" ]] && redis_dist="bookworm"
+    curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg 2>/dev/null || true
+    echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $redis_dist main" | tee /etc/apt/sources.list.d/redis.list >/dev/null
+    apt-get update -qq
     apt-get install -y -qq redis-server
 
     systemctl enable redis-server
