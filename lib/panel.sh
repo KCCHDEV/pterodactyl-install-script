@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 PANEL_REPO="https://github.com/pterodactyl/panel.git"
-PANEL_BRANCH="release/v1"
+PANEL_BRANCH="release/v1.12.1"
 
 install_panel() {
     local db_name="${1:-panel}"

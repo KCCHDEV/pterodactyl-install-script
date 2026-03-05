@@ -47,27 +47,35 @@ CF_TUNNEL_TYPE=""
 FINAL_PANEL_URL=""
 
 prompt_inputs() {
+    # When run via curl|bash, stdin is pipe - read from /dev/tty for user input
+    prompt_read() { [[ -e /dev/tty ]] && read -rp "$1" < /dev/tty || read -rp "$1"; }
+    prompt_read_s() { [[ -e /dev/tty ]] && read -rsp "$1" < /dev/tty || read -rsp "$1"; }
+
     echo ""
     echo "=============================================="
     echo "  Pterodactyl Panel Auto Installer"
     echo "=============================================="
     echo ""
 
-    read -rp "FQDN/Domain (e.g. panel.example.com): " FQDN
-    FQDN="${FQDN:-localhost}"
+    prompt_read "FQDN/Domain (e.g. panel.example.com): "
+    FQDN="${REPLY:-localhost}"
     if [[ "$FQDN" == "localhost" ]]; then
         log_warn "Using localhost - suitable for HTTP dev mode only"
     fi
 
-    read -rp "Admin Email: " ADMIN_EMAIL
+    prompt_read "Admin Email: "
+    ADMIN_EMAIL="$REPLY"
     while [[ -z "$ADMIN_EMAIL" ]]; do
-        read -rp "Admin Email (required): " ADMIN_EMAIL
+        prompt_read "Admin Email (required): "
+        ADMIN_EMAIL="$REPLY"
     done
 
-    read -rsp "Admin Password: " ADMIN_PASSWORD
+    prompt_read_s "Admin Password: "
+    ADMIN_PASSWORD="$REPLY"
     echo ""
     while [[ ${#ADMIN_PASSWORD} -lt 8 ]]; do
-        read -rsp "Admin Password (min 8 chars): " ADMIN_PASSWORD
+        prompt_read_s "Admin Password (min 8 chars): "
+        ADMIN_PASSWORD="$REPLY"
         echo ""
     done
 
@@ -76,24 +84,25 @@ prompt_inputs() {
     echo "  1) HTTP  - Development, no SSL"
     echo "  2) HTTPS - Let's Encrypt SSL (domain must point to this server)"
     echo "  3) Cloudflare Tunnel - No port open, use trycloudflare.com or your domain"
-    read -rp "Choice [1-3]: " INSTALL_MODE
-    INSTALL_MODE="${INSTALL_MODE:-1}"
+    prompt_read "Choice [1-3]: "
+    INSTALL_MODE="${REPLY:-1}"
 
     if [[ "$INSTALL_MODE" == "3" ]]; then
         echo "  a) Quick Tunnel - Free, no account, get xxx.trycloudflare.com URL"
         echo "  b) Named Tunnel - Use your domain, requires Cloudflare account"
-        read -rp "CF Tunnel type [a/b]: " CF_TUNNEL_TYPE
-        CF_TUNNEL_TYPE="${CF_TUNNEL_TYPE:-a}"
+        prompt_read "CF Tunnel type [a/b]: "
+        CF_TUNNEL_TYPE="${REPLY:-a}"
     fi
 
-    read -rp "DB Password for pterodactyl (or Enter to auto-generate): " DB_PASSWORD
+    prompt_read "DB Password for pterodactyl (or Enter to auto-generate): "
+    DB_PASSWORD="$REPLY"
     if [[ -z "$DB_PASSWORD" ]]; then
         DB_PASSWORD=$(generate_random_password)
         log_info "Generated DB password"
     fi
 
-    read -rp "Install Wings (game server daemon)? [Y/n]: " INSTALL_WINGS
-    INSTALL_WINGS="${INSTALL_WINGS:-Y}"
+    prompt_read "Install Wings (game server daemon)? [Y/n]: "
+    INSTALL_WINGS="${REPLY:-Y}"
 
     # Set APP_URL based on mode
     case "$INSTALL_MODE" in
