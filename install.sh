@@ -13,8 +13,8 @@ get_script_dir() {
         echo ""
     fi
 }
-SCRIPT_DIR=$(get_script_dir)
-if [[ -z "$SCRIPT_DIR" || ! -d "$SCRIPT_DIR/lib" ]]; then
+INSTALLER_ROOT=$(get_script_dir)
+if [[ -z "$INSTALLER_ROOT" || ! -d "$INSTALLER_ROOT/lib" ]]; then
     log_bootstrap() { echo "[INFO] $*"; }
     log_bootstrap "Downloading installer from GitHub..."
     TMP_DIR=$(mktemp -d)
@@ -30,7 +30,7 @@ fi
 
 for lib in common dependencies panel wings ssl cftunnel; do
     # shellcheck source=/dev/null
-    source "$SCRIPT_DIR/lib/$lib.sh"
+    source "$INSTALLER_ROOT/lib/$lib.sh"
 done
 
 # Config variables (set by prompt)
@@ -110,7 +110,7 @@ prompt_inputs() {
     esac
 
     # Save config for lib scripts
-    cat > "$SCRIPT_DIR/.install-config" << CONFIG
+    cat > "$INSTALLER_ROOT/.install-config" << CONFIG
 export FQDN="$FQDN"
 export ADMIN_EMAIL="$ADMIN_EMAIL"
 export ADMIN_PASSWORD="$ADMIN_PASSWORD"
@@ -199,7 +199,7 @@ run_install() {
 
     prompt_inputs
     # shellcheck source=/dev/null
-    source "$SCRIPT_DIR/.install-config"
+    source "$INSTALLER_ROOT/.install-config"
 
     log_info "Starting installation..."
 
@@ -263,9 +263,9 @@ run_install() {
     save_credentials "$FINAL_PANEL_URL"
 
     # Copy installer to /opt for uninstall/cleaner access
-    if [[ -d "$SCRIPT_DIR/lib" ]]; then
+    if [[ -d "$INSTALLER_ROOT/lib" ]]; then
         mkdir -p /opt/pterodactyl-install-script
-        cp -r "$SCRIPT_DIR"/* /opt/pterodactyl-install-script/ 2>/dev/null || true
+        cp -r "$INSTALLER_ROOT"/* /opt/pterodactyl-install-script/ 2>/dev/null || true
         chmod +x /opt/pterodactyl-install-script/*.sh 2>/dev/null || true
     fi
 
