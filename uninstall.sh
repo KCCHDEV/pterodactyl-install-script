@@ -172,6 +172,10 @@ remove_installer_copy() {
     fi
 }
 
+remove_saved_config() {
+    rm -f /root/.pterodactyl-install-config 2>/dev/null && log_success "Saved install config removed" || true
+}
+
 run_uninstall() {
     check_root
     confirm_uninstall
@@ -185,6 +189,7 @@ run_uninstall() {
     remove_credentials
     remove_settings_json
     remove_installer_copy
+    remove_saved_config
 
     echo ""
     log_success "Uninstall complete."

@@ -39,12 +39,12 @@ install_panel() {
     php artisan key:generate --force
 
     # Database config
-    sed -i "s/DB_DATABASE=.*/DB_DATABASE=$db_name/" .env
-    sed -i "s/DB_USERNAME=.*/DB_USERNAME=$db_user/" .env
-    sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$db_pass/" .env
-    sed -i "s/APP_URL=.*/APP_URL=$app_url/" .env
-    sed -i "s/APP_ENV=.*/APP_ENV=production/" .env
-    sed -i "s/APP_DEBUG=.*/APP_DEBUG=false/" .env
+    sed -i "s|DB_DATABASE=.*|DB_DATABASE=$db_name|" .env
+    sed -i "s|DB_USERNAME=.*|DB_USERNAME=$db_user|" .env
+    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$db_pass|" .env
+    sed -i "s|APP_URL=.*|APP_URL=$app_url|" .env
+    sed -i "s|APP_ENV=.*|APP_ENV=production|" .env
+    sed -i "s|APP_DEBUG=.*|APP_DEBUG=false|" .env
 
     log_info "Running migrations..."
     php artisan migrate --force

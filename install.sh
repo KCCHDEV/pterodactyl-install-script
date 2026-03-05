@@ -28,7 +28,7 @@ if [[ -z "$INSTALLER_ROOT" || ! -d "$INSTALLER_ROOT/lib" ]]; then
     fi
 fi
 
-for lib in common dependencies panel wings ssl cftunnel; do
+for lib in common dependencies panel wings ssl cftunnel switch; do
     # shellcheck source=/dev/null
     source "$INSTALLER_ROOT/lib/$lib.sh"
 done
@@ -45,6 +45,8 @@ DB_PASSWORD=""
 APP_URL=""
 CF_TUNNEL_TYPE=""
 FINAL_PANEL_URL=""
+
+PERSISTENT_CONFIG="/root/.pterodactyl-install-config"
 
 prompt_inputs() {
     # When run via curl|bash, stdin is pipe - read from /dev/tty for user input
@@ -118,7 +120,7 @@ prompt_inputs() {
         *) APP_URL="http://${FQDN}" ;;
     esac
 
-    # Save config for lib scripts
+    # Save config for lib scripts and persist for retry on error
     cat > "$INSTALLER_ROOT/.install-config" << CONFIG
 export FQDN="$FQDN"
 export ADMIN_EMAIL="$ADMIN_EMAIL"
@@ -132,6 +134,7 @@ export INSTALL_MODE="$INSTALL_MODE"
 export CF_TUNNEL_TYPE="$CF_TUNNEL_TYPE"
 export INSTALL_WINGS="$INSTALL_WINGS"
 CONFIG
+    cp "$INSTALLER_ROOT/.install-config" "$PERSISTENT_CONFIG" 2>/dev/null && chmod 600 "$PERSISTENT_CONFIG" || true
 }
 
 create_database() {
@@ -166,6 +169,108 @@ save_settings_json() {
 JSON
     chmod 600 "$SETTINGS_JSON_PATH"
     log_success "Settings saved to $SETTINGS_JSON_PATH"
+}
+
+is_panel_installed() {
+    [[ -f "$SETTINGS_JSON_PATH" && -d "${PANEL_PATH:-/var/www/pterodactyl}" ]]
+}
+
+prompt_read() {
+    [[ -e /dev/tty ]] && read -rp "$1" < /dev/tty || read -rp "$1"
+}
+
+main_menu() {
+    echo ""
+    echo "=============================================="
+    echo "  Pterodactyl Panel - Main Menu"
+    echo "=============================================="
+    echo ""
+    echo "  1) Fresh Install    - Full panel installation"
+    echo "  2) Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
+    echo "  3) Install Wings    - Add Wings daemon (game servers)"
+    echo "  4) Exit"
+    echo ""
+    prompt_read "Choice [1-4]: "
+    echo "${REPLY:-1}"
+}
+
+run_switch_mode() {
+    if ! is_panel_installed; then
+        log_error "Panel not installed. Run Fresh Install first."
+        exit 1
+    fi
+
+    local fqdn admin_email current_mode
+    fqdn=$(get_json_value "$SETTINGS_JSON_PATH" "fqdn")
+    admin_email=$(get_json_value "$SETTINGS_JSON_PATH" "admin_email")
+    current_mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
+
+    local mode_name
+    case "$current_mode" in
+        1) mode_name="HTTP" ;;
+        2) mode_name="HTTPS" ;;
+        3) mode_name="Cloudflare Tunnel" ;;
+        *) mode_name="Unknown" ;;
+    esac
+
+    echo ""
+    echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
+    echo ""
+    echo "  Switch to:"
+    echo "  1) HTTP  - Development, no SSL"
+    echo "  2) HTTPS - Let's Encrypt SSL"
+    echo "  3) Cloudflare Tunnel"
+    echo "  4) Back to main menu"
+    echo ""
+    prompt_read "Choice [1-4]: "
+    local choice="${REPLY:-4}"
+
+    case "$choice" in
+        1) switch_to_http ;;
+        2) switch_to_https ;;
+        3)
+            echo "  a) Quick Tunnel (trycloudflare.com)"
+            echo "  b) Named Tunnel (your domain)"
+            prompt_read "CF type [a/b]: "
+            switch_to_cftunnel "${REPLY:-a}"
+            ;;
+        4) return 0 ;;
+        *) log_error "Invalid choice"; return 1 ;;
+    esac
+
+    echo ""
+    echo "Switch complete. Restart Wings if needed: systemctl restart wings"
+    echo ""
+}
+
+run_install_wings_only() {
+    if ! is_panel_installed; then
+        log_error "Panel not installed. Run Fresh Install first."
+        exit 1
+    fi
+
+    local panel_url
+    panel_url=$(get_json_value "$SETTINGS_JSON_PATH" "panel_url")
+    panel_url="${panel_url:-http://localhost}"
+
+    if [[ -x "$WINGS_BINARY" ]]; then
+        log_warn "Wings already installed at $WINGS_BINARY"
+        prompt_read "Reinstall? [y/N]: "
+        [[ "${REPLY:-n}" != "y" && "${REPLY:-n}" != "Y" ]] && return 0
+    fi
+
+    log_info "Installing Wings..."
+    install_wings "$panel_url" ""
+    systemctl enable wings 2>/dev/null || true
+    systemctl start wings 2>/dev/null || true
+
+    # Update settings
+    if [[ -f "$SETTINGS_JSON_PATH" ]]; then
+        sed -i 's/"wings_installed":[[:space:]]*false/"wings_installed": true/' "$SETTINGS_JSON_PATH" 2>/dev/null || true
+    fi
+
+    log_success "Wings installed. Configure node in Panel -> Configuration"
+    echo ""
 }
 
 save_credentials() {
@@ -206,7 +311,23 @@ run_install() {
     check_os
     check_disk_space
 
-    prompt_inputs
+    if [[ -f "$PERSISTENT_CONFIG" ]]; then
+        if [[ -e /dev/tty ]]; then
+            read -rp "Use saved config from previous run? [Y/n]: " < /dev/tty || true
+        else
+            read -rp "Use saved config from previous run? [Y/n]: " || true
+        fi
+        use_saved="${REPLY:-Y}"
+        if [[ "$use_saved" == "y" || "$use_saved" == "Y" || "$use_saved" == "yes" || -z "$use_saved" ]]; then
+            cp "$PERSISTENT_CONFIG" "$INSTALLER_ROOT/.install-config"
+            log_info "Using saved config"
+        else
+            prompt_inputs
+        fi
+    else
+        prompt_inputs
+    fi
+
     # shellcheck source=/dev/null
     source "$INSTALLER_ROOT/.install-config"
 
@@ -299,7 +420,22 @@ run_install() {
     echo ""
 }
 
+run_main() {
+    check_root
+    local choice
+    while true; do
+        choice=$(main_menu)
+        case "$choice" in
+            1) run_install; break ;;
+            2) run_switch_mode ;;
+            3) run_install_wings_only; break ;;
+            4) log_info "Exit"; exit 0 ;;
+            *) run_install; break ;;  # Default to fresh install for non-interactive
+        esac
+    done
+}
+
 # Run if executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    run_install
+    run_main
 fi
