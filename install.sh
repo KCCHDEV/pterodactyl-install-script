@@ -44,6 +44,8 @@ DB_USER="pterodactyl"
 DB_PASSWORD=""
 APP_URL=""
 CF_TUNNEL_TYPE=""
+SSL_CERT_PATH=""
+SSL_KEY_PATH=""
 FINAL_PANEL_URL=""
 
 PERSISTENT_CONFIG="/root/.pterodactyl-install-config"
@@ -86,7 +88,8 @@ prompt_inputs() {
     echo "  [1] HTTP  - Development, no SSL"
     echo "  [2] HTTPS - Let's Encrypt SSL (domain must point to this server)"
     echo "  [3] Cloudflare Tunnel - No port open, use trycloudflare.com or your domain"
-    prompt_read "Enter 1-3: "
+    echo "  [4] Cloudflare Proxy - Orange cloud + Origin SSL (custom cert path)"
+    prompt_read "Enter 1-4: "
     INSTALL_MODE="${REPLY:-1}"
 
     if [[ "$INSTALL_MODE" == "3" ]]; then
@@ -94,6 +97,19 @@ prompt_inputs() {
         echo "  [b] Named Tunnel - Use your domain, requires Cloudflare account"
         prompt_read "Enter a or b: "
         CF_TUNNEL_TYPE="${REPLY:-a}"
+    fi
+
+    if [[ "$INSTALL_MODE" == "4" ]]; then
+        prompt_read "SSL cert path [/etc/ssl/cert.pem]: "
+        SSL_CERT_PATH="${REPLY:-/etc/ssl/cert.pem}"
+        prompt_read "SSL key path [/etc/ssl/key.pem]: "
+        SSL_KEY_PATH="${REPLY:-/etc/ssl/key.pem}"
+        if [[ ! -f "$SSL_CERT_PATH" ]] || [[ ! -f "$SSL_KEY_PATH" ]]; then
+            prompt_read "Certificate not found. Generate self-signed SSL? [Y/n]: "
+            if [[ "${REPLY:-Y}" =~ ^[yY] ]]; then
+                generate_self_signed_ssl "$SSL_CERT_PATH" "$SSL_KEY_PATH" "$FQDN"
+            fi
+        fi
     fi
 
     prompt_read "DB Password for pterodactyl (or Enter to auto-generate): "
@@ -117,6 +133,7 @@ prompt_inputs() {
                 APP_URL="https://${FQDN}"
             fi
             ;;
+        4) APP_URL="https://${FQDN}" ;;
         *) APP_URL="http://${FQDN}" ;;
     esac
 
@@ -132,6 +149,8 @@ export DB_PASSWORD="$DB_PASSWORD"
 export APP_URL="$APP_URL"
 export INSTALL_MODE="$INSTALL_MODE"
 export CF_TUNNEL_TYPE="$CF_TUNNEL_TYPE"
+export SSL_CERT_PATH="$SSL_CERT_PATH"
+export SSL_KEY_PATH="$SSL_KEY_PATH"
 export INSTALL_WINGS="$INSTALL_WINGS"
 CONFIG
     cp "$INSTALLER_ROOT/.install-config" "$PERSISTENT_CONFIG" 2>/dev/null && chmod 600 "$PERSISTENT_CONFIG" || true
@@ -185,6 +204,8 @@ save_settings_json() {
   "admin_username": "$ADMIN_USERNAME",
   "install_mode": "$INSTALL_MODE",
   "cf_tunnel_type": "${CF_TUNNEL_TYPE:-}",
+  "ssl_cert_path": "${SSL_CERT_PATH:-}",
+  "ssl_key_path": "${SSL_KEY_PATH:-}",
   "db_name": "$DB_NAME",
   "db_user": "$DB_USER",
   "panel_url": "$panel_url",
@@ -280,6 +301,7 @@ run_switch_mode() {
         1) mode_name="HTTP" ;;
         2) mode_name="HTTPS" ;;
         3) mode_name="Cloudflare Tunnel" ;;
+        4) mode_name="Cloudflare Proxy" ;;
         *) mode_name="Unknown" ;;
     esac
 
@@ -290,10 +312,11 @@ run_switch_mode() {
     echo "  [1] HTTP  - Development, no SSL"
     echo "  [2] HTTPS - Let's Encrypt SSL"
     echo "  [3] Cloudflare Tunnel"
-    echo "  [4] Back to main menu"
+    echo "  [4] Cloudflare Proxy - Orange cloud + Origin SSL"
+    echo "  [5] Back to main menu"
     echo ""
-    prompt_read "Enter 1-4: "
-    local choice="${REPLY:-4}"
+    prompt_read "Enter 1-5: "
+    local choice="${REPLY:-5}"
 
     case "$choice" in
         1) switch_to_http ;;
@@ -304,7 +327,8 @@ run_switch_mode() {
             prompt_read "Enter a or b: "
             switch_to_cftunnel "${REPLY:-a}"
             ;;
-        4) return 0 ;;
+        4) switch_to_cloudflare_proxy ;;
+        5) return 0 ;;
         *) log_error "Invalid choice"; return 1 ;;
     esac
 
@@ -480,6 +504,10 @@ run_install() {
                 setup_named_tunnel "pterodactyl-panel" "$FQDN"
                 FINAL_PANEL_URL="https://${FQDN} (complete CF tunnel login first)"
             fi
+            ;;
+        4)
+            create_nginx_cloudflare_proxy "$FQDN" "${SSL_CERT_PATH:-/etc/ssl/cert.pem}" "${SSL_KEY_PATH:-/etc/ssl/key.pem}"
+            FINAL_PANEL_URL="https://${FQDN}"
             ;;
         *)
             create_nginx_http "$FQDN"

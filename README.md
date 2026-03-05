@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Ubuntu%2022.04%20%7C%20Debian%2011+-blue)](https://ubuntu.com)
 [![Shell](https://img.shields.io/badge/Shell-Bash-green)](https://www.gnu.org/software/bash/)
 
-*ติดตั้ง Pterodactyl Panel แบบอัตโนมัติ — HTTP, HTTPS หรือ Cloudflare Tunnel เลือกได้ตามใจ*
+*ติดตั้ง Pterodactyl Panel แบบอัตโนมัติ — HTTP, HTTPS, Cloudflare Proxy หรือ Cloudflare Tunnel เลือกได้ตามใจ*
 
 </div>
 
@@ -19,7 +19,7 @@
 | Feature | Description |
 |--------|-------------|
 | 🚀 **One-Time Input** | กรอกข้อมูลครั้งเดียว — ที่เหลือให้สคริปต์จัดการ |
-| 🔐 **3 Modes** | HTTP / HTTPS (Let's Encrypt) / Cloudflare Tunnel |
+| 🔐 **4 Modes** | HTTP / HTTPS (Let's Encrypt) / Cloudflare Proxy / Cloudflare Tunnel |
 | 🎮 **Wings Optional** | เลือกได้ว่าจะติดตั้ง game server daemon หรือไม่ |
 | 📦 **Curated** | ตั้งค่าทุกอย่างให้ — พร้อมใช้ทันที |
 | 🧹 **Maintenance** | มี uninstall + cleaner ในชุด |
@@ -63,6 +63,7 @@ sudo ./install.sh
 | **1 - HTTP** | Development / ทดสอบ | ❌ |
 | **2 - HTTPS** | Production (Let's Encrypt) | ✅ Auto |
 | **3 - CF Tunnel** | Quick (`xxx.trycloudflare.com`) หรือ Named (domain ของคุณ) | ✅ |
+| **4 - CF Proxy** | Orange cloud + Origin SSL (cert path แบบกำหนดเองได้) | ✅ Custom |
 
 ---
 
@@ -73,7 +74,7 @@ sudo ./install.sh
 - **FQDN** — domain เช่น `panel.example.com` หรือ `localhost`
 - **Admin Email** — สำหรับ admin + SSL
 - **Admin Password** — ขั้นต่ำ 8 ตัว
-- **Install Mode** — 1, 2 หรือ 3
+- **Install Mode** — 1, 2, 3 หรือ 4
 - **DB Password** — กด Enter เพื่อ auto-generate
 - **Install Wings?** — Y/n (ตัวเลือก game server daemon)
 
@@ -155,6 +156,8 @@ sudo ./cleaner.sh logs --keep-days 14
 - **Wings** — ไม่ start อัตโนมัติจนกว่าจะสร้าง Node และรัน deployment
 - **CF Quick Tunnel** — URL เปลี่ยนทุกครั้งที่ restart
 - **HTTPS** — domain ต้องชี้มาที่ server ก่อนรัน Certbot
+- **CF Proxy (4)** — ใช้กับ Cloudflare orange cloud, ระบุ path cert/key ได้ (เช่น Cloudflare Origin SSL, Let's Encrypt)
+- **Self-Signed SSL** — ถ้า cert ไม่มี สคริปต์จะถามสร้างให้อัตโนมัติ (ใช้ OpenSSL)
 
 ---
 
