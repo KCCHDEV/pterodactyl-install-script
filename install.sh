@@ -180,16 +180,18 @@ prompt_read() {
 }
 
 main_menu() {
-    echo ""
-    echo "=============================================="
-    echo "  Pterodactyl Panel - Main Menu"
-    echo "=============================================="
-    echo ""
-    echo "  [1] Fresh Install    - Full panel installation"
-    echo "  [2] Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
-    echo "  [3] Install Wings    - Add Wings daemon (game servers)"
-    echo "  [4] Exit"
-    echo ""
+    {
+        echo ""
+        echo "=============================================="
+        echo "  Pterodactyl Panel - Main Menu"
+        echo "=============================================="
+        echo ""
+        echo "  [1] Fresh Install    - Full panel installation"
+        echo "  [2] Switch Mode      - Change HTTP / HTTPS / CF Tunnel"
+        echo "  [3] Install Wings    - Add Wings daemon (game servers)"
+        echo "  [4] Exit"
+        echo ""
+    } >&2
     prompt_read "Enter 1-4: "
     echo "${REPLY:-1}"
 }
