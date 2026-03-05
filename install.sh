@@ -137,13 +137,38 @@ CONFIG
     cp "$INSTALLER_ROOT/.install-config" "$PERSISTENT_CONFIG" 2>/dev/null && chmod 600 "$PERSISTENT_CONFIG" || true
 }
 
+verify_db_connection() {
+    mysql -u "$DB_USER" -p"$DB_PASSWORD" -h 127.0.0.1 "$DB_NAME" -e "SELECT 1;" &>/dev/null
+}
+
+fix_db_user() {
+    log_info "Fixing database user (Access denied)..."
+    mysql -e "DROP USER IF EXISTS '$DB_USER'@'localhost';" 2>/dev/null || true
+    mysql -e "DROP USER IF EXISTS '$DB_USER'@'127.0.0.1';" 2>/dev/null || true
+    mysql -e "CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';"
+    mysql -e "CREATE USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';"
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';"
+    mysql -e "FLUSH PRIVILEGES;"
+    log_success "Database user fixed"
+}
+
 create_database() {
     log_info "Creating database and user..."
     mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;" 2>/dev/null || true
+    mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
     mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
+    mysql -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
+    mysql -e "ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';" 2>/dev/null || true
+    mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
     mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';"
     mysql -e "FLUSH PRIVILEGES;"
-    log_success "Database created"
+
+    if ! verify_db_connection; then
+        fix_db_user
+        verify_db_connection || { log_error "Database connection failed. Check credentials."; exit 1; }
+    fi
+    log_success "Database created and verified"
 }
 
 save_settings_json() {

@@ -38,7 +38,8 @@ install_panel() {
     cp .env.example .env
     php artisan key:generate --force
 
-    # Database config
+    # Database config (DB_HOST=127.0.0.1 ensures consistent connection)
+    sed -i "s|DB_HOST=.*|DB_HOST=127.0.0.1|" .env
     sed -i "s|DB_DATABASE=.*|DB_DATABASE=$db_name|" .env
     sed -i "s|DB_USERNAME=.*|DB_USERNAME=$db_user|" .env
     sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$db_pass|" .env
@@ -47,7 +48,22 @@ install_panel() {
     sed -i "s|APP_DEBUG=.*|APP_DEBUG=false|" .env
 
     log_info "Running migrations..."
-    php artisan migrate --force
+    if ! php artisan migrate --force; then
+        # Auto-fix: if fix_db_user exists (from install.sh), fix and retry
+        if type fix_db_user &>/dev/null; then
+            log_warn "Migration failed (likely Access denied), fixing database..."
+            fix_db_user
+            if php artisan migrate --force; then
+                log_success "Migrations completed after fix"
+            else
+                log_error "Migration failed. Check database credentials."
+                exit 1
+            fi
+        else
+            log_error "Migration failed. Run installer to fix database."
+            exit 1
+        fi
+    fi
 
     log_info "Creating admin user..."
     php artisan p:user:make \
