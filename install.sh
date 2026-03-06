@@ -1039,11 +1039,13 @@ update_wings_api_port() {
 }
 
 switch_to_tunnel() {
-    local cf_type
+    local cf_type domain_override
     cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
     [[ "$cf_type" != "b" ]] && cf_type="a"
+    domain_override="${2:-}"
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
+    [[ -n "$domain_override" ]] && FQDN="$domain_override"
 
     # Stop old tunnel when reconfiguring (from mode 1 or 3)
     [[ "$CURRENT_MODE" == "1" || "$CURRENT_MODE" == "3" ]] && stop_cloudflared_if_active
@@ -1055,7 +1057,7 @@ switch_to_tunnel() {
         setup_named_tunnel "pterodactyl-panel" "$FQDN"
         local new_url="https://${FQDN}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
-        update_settings_mode "1" "$new_url" "b"
+        update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
         update_wings_api_port "80"
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         log_success "Named tunnel. Panel URL: $new_url"
@@ -1091,11 +1093,13 @@ switch_to_npm() {
 }
 
 switch_to_npm_tunnel() {
-    local cf_type
+    local cf_type domain_override
     cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
     [[ "$cf_type" != "b" ]] && cf_type="a"
+    domain_override="${2:-}"
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
+    [[ -n "$domain_override" ]] && FQDN="$domain_override"
 
     log_info "Switching to NPM + Tunnel mode..." >&2
     stop_cloudflared_if_active
@@ -1107,7 +1111,7 @@ switch_to_npm_tunnel() {
         setup_named_tunnel "pterodactyl-panel" "$FQDN" "8080"
         local new_url="https://${FQDN} (NPM + CF tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
-        update_settings_mode "3" "$new_url" "b"
+        update_settings_mode "3" "$new_url" "b" "" "" "$FQDN"
         update_wings_api_port "8080"
         log_success "Named tunnel + NPM. Panel URL: $new_url"
     else
@@ -1129,6 +1133,7 @@ update_settings_mode() {
     local cf_type="${3:-}"
     local cert_path="${4:-}"
     local key_path="${5:-}"
+    local fqdn_override="${6:-}"
 
     if [[ ! -f "$SETTINGS_JSON_PATH" ]]; then
         return 0
@@ -1137,7 +1142,7 @@ update_settings_mode() {
     # Update install_mode and panel_url in JSON (simple sed replacement)
     sed -i "s|\"install_mode\":[[:space:]]*\"[^\"]*\"|\"install_mode\": \"$mode\"|" "$SETTINGS_JSON_PATH"
     sed -i "s|\"panel_url\":[[:space:]]*\"[^\"]*\"|\"panel_url\": \"$panel_url\"|" "$SETTINGS_JSON_PATH"
-    # Always update cf_tunnel_type (empty string for NPM mode 2)
+    [[ -n "$fqdn_override" ]] && sed -i "s|\"fqdn\":[[:space:]]*\"[^\"]*\"|\"fqdn\": \"$fqdn_override\"|" "$SETTINGS_JSON_PATH" 2>/dev/null || true
     sed -i "s|\"cf_tunnel_type\":[[:space:]]*\"[^\"]*\"|\"cf_tunnel_type\": \"$cf_type\"|" "$SETTINGS_JSON_PATH" 2>/dev/null || true
     if [[ -n "$cert_path" ]] && grep -q '"ssl_cert_path"' "$SETTINGS_JSON_PATH" 2>/dev/null; then
         sed -i "s|\"ssl_cert_path\":[[:space:]]*\"[^\"]*\"|\"ssl_cert_path\": \"$(echo "$cert_path" | sed 's/\\/\\\\/g; s/"/\\"/g')\"|" "$SETTINGS_JSON_PATH"
@@ -1212,6 +1217,13 @@ prompt_inputs() {
         [[ "$CF_TUNNEL_TYPE" != "b" ]] && CF_TUNNEL_TYPE="a"
         if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
             log_info "Selected: Named Tunnel (your domain)"
+            if [[ "$FQDN" == "localhost" || "$FQDN" == "127.0.0.1" || -z "$FQDN" ]]; then
+                while [[ "$FQDN" == "localhost" || "$FQDN" == "127.0.0.1" || -z "$FQDN" ]]; do
+                    prompt_read "Named Tunnel requires a domain. Enter domain (e.g. panel.example.com): "
+                    FQDN="${REPLY:-}"
+                    [[ -z "$FQDN" ]] && log_warn "Domain is required for Named Tunnel"
+                done
+            fi
         else
             log_info "Selected: Quick Tunnel (trycloudflare.com)"
         fi
@@ -1349,7 +1361,6 @@ main_menu() {
     echo "${REPLY:-1}"
 }
 
-
 run_remove() { run_uninstall_inline; }
 
 run_remove_and_install() {
@@ -1405,30 +1416,36 @@ run_switch_mode() {
             echo "  [a] Quick Tunnel (trycloudflare.com)"
             echo "  [b] Named Tunnel (your domain)"
             prompt_read "Enter a or b: "
-            local tunnel_choice
+            local tunnel_choice domain_override
             tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
                 log_info "Selected: Named Tunnel (your domain)"
-            else
-                log_info "Selected: Quick Tunnel (trycloudflare.com)"
+                if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
+                    prompt_read "Enter your domain (e.g. panel.example.com): "
+                    domain_override="${REPLY:-}"
+                    [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
+                fi
             fi
-            switch_to_tunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
+            switch_to_tunnel "$tunnel_choice" "${domain_override:-}" || { log_error "Switch failed." >&2; return 1; }
             ;;
         2) switch_to_npm || { log_error "Switch failed." >&2; return 1; } ;;
         3)
             echo "  [a] Quick Tunnel (trycloudflare.com)"
             echo "  [b] Named Tunnel (your domain)"
             prompt_read "Enter a or b: "
-            local tunnel_choice
+            local tunnel_choice domain_override
             tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
                 log_info "Selected: Named Tunnel (your domain)"
-            else
-                log_info "Selected: Quick Tunnel (trycloudflare.com)"
+                if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
+                    prompt_read "Enter your domain (e.g. panel.example.com): "
+                    domain_override="${REPLY:-}"
+                    [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
+                fi
             fi
-            switch_to_npm_tunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
+            switch_to_npm_tunnel "$tunnel_choice" "${domain_override:-}" || { log_error "Switch failed." >&2; return 1; }
             ;;
         4) return 0 ;;
         *) log_error "Invalid choice"; return 1 ;;
@@ -1550,7 +1567,6 @@ Node Setup (required for game servers):
 CREDS
     chmod 600 "$CREDENTIALS_FILE"
     log_success "Credentials saved to $CREDENTIALS_FILE"
-}
 run_install() {
     check_root
     check_os
@@ -1656,8 +1672,6 @@ run_install() {
     save_settings_json "$FINAL_PANEL_URL" "$wings_installed"
     save_credentials "$FINAL_PANEL_URL"
 
-    # Copy installer to /opt for uninstall/cleaner access
-
     mkdir -p /opt/pterodactyl-install-script
     if [[ -f "${BASH_SOURCE[0]}" ]]; then
         cp "${BASH_SOURCE[0]}" /opt/pterodactyl-install-script/install.sh
@@ -1665,6 +1679,7 @@ run_install() {
         curl -sSL "https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/refs/heads/main/install.sh" -o /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
     fi
     chmod +x /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
+
     echo ""
     echo "=============================================="
     log_success "Installation complete!"
@@ -1684,8 +1699,6 @@ run_install() {
         echo "  3. To install Wings later, run the installer again or use install-wings.sh"
     fi
     echo ""
-}
-
 run_uninstall_inline() {
     local skip_confirm="${1:-}"
     WINGS_INSTALLED=true

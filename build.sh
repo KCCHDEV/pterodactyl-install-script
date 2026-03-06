@@ -46,8 +46,8 @@ HEAD
     strip_lib lib/cftunnel.sh
     strip_lib lib/switch.sh
 
-    # Main from install-multi.sh: lines 39-241 (config through main_menu), skip run_remove/run_remove_and_install
-    sed -n '39,241p' install-multi.sh
+    # Main from install-multi.sh: lines 39-247 (config through main_menu), skip run_remove/run_remove_and_install
+    sed -n '39,247p' install-multi.sh
 
     cat << 'REMOVE'
 
@@ -72,11 +72,11 @@ run_remove_and_install() {
 }
 REMOVE
 
-    # run_switch_mode through save_credentials (282-463)
-    sed -n '282,463p' install-multi.sh
+    # run_switch_mode through save_credentials (289-475)
+    sed -n '289,475p' install-multi.sh
 
-    # run_install: 465-570 (through save_credentials), skip 571-575 (old copy block)
-    sed -n '465,570p' install-multi.sh
+    # run_install: 478-581 (through save_credentials), skip 583-587 (old copy block)
+    sed -n '478,581p' install-multi.sh
 
     cat << 'COPY_OPT'
 
@@ -89,8 +89,8 @@ REMOVE
     chmod +x /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
 COPY_OPT
 
-    # Completion message and run_install closing brace (577-597)
-    sed -n '577,597p' install-multi.sh | sed 's|Uninstall: sudo /opt/pterodactyl-install-script/uninstall.sh|Uninstall: Run script again, choose [5] Remove|'
+    # Completion message and run_install closing brace (589-608)
+    sed -n '589,608p' install-multi.sh | sed 's|Uninstall: sudo /opt/pterodactyl-install-script/uninstall.sh|Uninstall: Run script again, choose [5] Remove|'
 
     # run_uninstall_inline
     cat << 'UNINSTALL'
@@ -167,8 +167,8 @@ run_uninstall_inline() {
 }
 UNINSTALL
 
-    # run_main and entry point (598-620)
-    sed -n '598,620p' install-multi.sh
+    # run_main and entry point (611-633)
+    sed -n '611,633p' install-multi.sh
 
 } > install.sh
 chmod +x install.sh

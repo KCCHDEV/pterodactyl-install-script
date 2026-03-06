@@ -50,11 +50,13 @@ update_wings_api_port() {
 }
 
 switch_to_tunnel() {
-    local cf_type
+    local cf_type domain_override
     cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
     [[ "$cf_type" != "b" ]] && cf_type="a"
+    domain_override="${2:-}"
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
+    [[ -n "$domain_override" ]] && FQDN="$domain_override"
 
     # Stop old tunnel when reconfiguring (from mode 1 or 3)
     [[ "$CURRENT_MODE" == "1" || "$CURRENT_MODE" == "3" ]] && stop_cloudflared_if_active
@@ -66,7 +68,7 @@ switch_to_tunnel() {
         setup_named_tunnel "pterodactyl-panel" "$FQDN"
         local new_url="https://${FQDN}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
-        update_settings_mode "1" "$new_url" "b"
+        update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
         update_wings_api_port "80"
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         log_success "Named tunnel. Panel URL: $new_url"
@@ -102,11 +104,13 @@ switch_to_npm() {
 }
 
 switch_to_npm_tunnel() {
-    local cf_type
+    local cf_type domain_override
     cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
     [[ "$cf_type" != "b" ]] && cf_type="a"
+    domain_override="${2:-}"
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
+    [[ -n "$domain_override" ]] && FQDN="$domain_override"
 
     log_info "Switching to NPM + Tunnel mode..." >&2
     stop_cloudflared_if_active
@@ -118,7 +122,7 @@ switch_to_npm_tunnel() {
         setup_named_tunnel "pterodactyl-panel" "$FQDN" "8080"
         local new_url="https://${FQDN} (NPM + CF tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
-        update_settings_mode "3" "$new_url" "b"
+        update_settings_mode "3" "$new_url" "b" "" "" "$FQDN"
         update_wings_api_port "8080"
         log_success "Named tunnel + NPM. Panel URL: $new_url"
     else
@@ -140,6 +144,7 @@ update_settings_mode() {
     local cf_type="${3:-}"
     local cert_path="${4:-}"
     local key_path="${5:-}"
+    local fqdn_override="${6:-}"
 
     if [[ ! -f "$SETTINGS_JSON_PATH" ]]; then
         return 0
@@ -148,7 +153,7 @@ update_settings_mode() {
     # Update install_mode and panel_url in JSON (simple sed replacement)
     sed -i "s|\"install_mode\":[[:space:]]*\"[^\"]*\"|\"install_mode\": \"$mode\"|" "$SETTINGS_JSON_PATH"
     sed -i "s|\"panel_url\":[[:space:]]*\"[^\"]*\"|\"panel_url\": \"$panel_url\"|" "$SETTINGS_JSON_PATH"
-    # Always update cf_tunnel_type (empty string for NPM mode 2)
+    [[ -n "$fqdn_override" ]] && sed -i "s|\"fqdn\":[[:space:]]*\"[^\"]*\"|\"fqdn\": \"$fqdn_override\"|" "$SETTINGS_JSON_PATH" 2>/dev/null || true
     sed -i "s|\"cf_tunnel_type\":[[:space:]]*\"[^\"]*\"|\"cf_tunnel_type\": \"$cf_type\"|" "$SETTINGS_JSON_PATH" 2>/dev/null || true
     if [[ -n "$cert_path" ]] && grep -q '"ssl_cert_path"' "$SETTINGS_JSON_PATH" 2>/dev/null; then
         sed -i "s|\"ssl_cert_path\":[[:space:]]*\"[^\"]*\"|\"ssl_cert_path\": \"$(echo "$cert_path" | sed 's/\\/\\\\/g; s/"/\\"/g')\"|" "$SETTINGS_JSON_PATH"

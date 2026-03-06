@@ -102,6 +102,13 @@ prompt_inputs() {
         [[ "$CF_TUNNEL_TYPE" != "b" ]] && CF_TUNNEL_TYPE="a"
         if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
             log_info "Selected: Named Tunnel (your domain)"
+            if [[ "$FQDN" == "localhost" || "$FQDN" == "127.0.0.1" || -z "$FQDN" ]]; then
+                while [[ "$FQDN" == "localhost" || "$FQDN" == "127.0.0.1" || -z "$FQDN" ]]; do
+                    prompt_read "Named Tunnel requires a domain. Enter domain (e.g. panel.example.com): "
+                    FQDN="${REPLY:-}"
+                    [[ -z "$FQDN" ]] && log_warn "Domain is required for Named Tunnel"
+                done
+            fi
         else
             log_info "Selected: Quick Tunnel (trycloudflare.com)"
         fi
@@ -315,30 +322,36 @@ run_switch_mode() {
             echo "  [a] Quick Tunnel (trycloudflare.com)"
             echo "  [b] Named Tunnel (your domain)"
             prompt_read "Enter a or b: "
-            local tunnel_choice
+            local tunnel_choice domain_override
             tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
                 log_info "Selected: Named Tunnel (your domain)"
-            else
-                log_info "Selected: Quick Tunnel (trycloudflare.com)"
+                if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
+                    prompt_read "Enter your domain (e.g. panel.example.com): "
+                    domain_override="${REPLY:-}"
+                    [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
+                fi
             fi
-            switch_to_tunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
+            switch_to_tunnel "$tunnel_choice" "${domain_override:-}" || { log_error "Switch failed." >&2; return 1; }
             ;;
         2) switch_to_npm || { log_error "Switch failed." >&2; return 1; } ;;
         3)
             echo "  [a] Quick Tunnel (trycloudflare.com)"
             echo "  [b] Named Tunnel (your domain)"
             prompt_read "Enter a or b: "
-            local tunnel_choice
+            local tunnel_choice domain_override
             tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
                 log_info "Selected: Named Tunnel (your domain)"
-            else
-                log_info "Selected: Quick Tunnel (trycloudflare.com)"
+                if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
+                    prompt_read "Enter your domain (e.g. panel.example.com): "
+                    domain_override="${REPLY:-}"
+                    [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
+                fi
             fi
-            switch_to_npm_tunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
+            switch_to_npm_tunnel "$tunnel_choice" "${domain_override:-}" || { log_error "Switch failed." >&2; return 1; }
             ;;
         4) return 0 ;;
         *) log_error "Invalid choice"; return 1 ;;
