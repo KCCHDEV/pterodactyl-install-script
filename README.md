@@ -84,18 +84,23 @@ sudo ./install.sh
 
 ```
 pterodactyl-install-script/
-├── install.sh        # Main installer
-├── uninstall.sh      # Uninstall
+├── install.sh        # Single-file installer (run curl|bash or ./install.sh)
+├── build.sh          # Build install.sh from lib/* (run: ./build.sh)
+├── install-multi.sh  # Backup/source for build
+├── uninstall.sh      # Standalone uninstall (or use install.sh menu [5])
 ├── cleaner.sh        # Logs/cache cleanup
-├── lib/
+├── lib/              # Source modules (for build)
 │   ├── common.sh
 │   ├── dependencies.sh
 │   ├── panel.sh
 │   ├── wings.sh
 │   ├── ssl.sh
-│   └── cftunnel.sh
+│   ├── cftunnel.sh
+│   └── switch.sh
 └── README.md
 ```
+
+**Single-file:** `install.sh` เป็นไฟล์เดียว — ไม่ต้องดาวน์โหลด archive อีก รัน `curl ... | bash` ได้ทันที
 
 ---
 
@@ -104,9 +109,11 @@ pterodactyl-install-script/
 ### Uninstall
 
 ```bash
-sudo /opt/ptero-panel-installer/uninstall.sh
-# หรือ
-sudo ./uninstall.sh
+# รัน installer อีกครั้ง เลือก [5] Remove
+sudo ./install.sh
+
+# หรือ standalone (ถ้ามี)
+sudo /opt/pterodactyl-install-script/install.sh
 ```
 
 พิมพ์ `yes` หรือ domain เพื่อยืนยัน
