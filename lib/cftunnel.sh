@@ -145,8 +145,31 @@ setup_named_tunnel() {
 
     mkdir -p /etc/cloudflared
 
+    # Auto-setup: if user has logged in, run create + route dns automatically
+    if [[ -f /root/.cloudflared/cert.pem ]] && [[ ! -f "$credentials_path" ]]; then
+        log_info "Cloudflare login detected. Creating tunnel and DNS route automatically..."
+        if cloudflared tunnel create "$tunnel_name" --credentials-file "$credentials_path" 2>/dev/null; then
+            log_success "Tunnel created"
+        else
+            # Tunnel may already exist - try to get credentials from existing tunnel
+            local tunnel_id
+            tunnel_id=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+            if [[ -n "$tunnel_id" && -f "/root/.cloudflared/${tunnel_id}.json" ]]; then
+                cp "/root/.cloudflared/${tunnel_id}.json" "$credentials_path"
+                log_success "Using existing tunnel credentials"
+            fi
+        fi
+        if [[ -f "$credentials_path" ]]; then
+            if cloudflared tunnel route dns "$tunnel_name" "$domain" 2>/dev/null; then
+                log_success "DNS route created: $domain -> $tunnel_name"
+            else
+                cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns 2>/dev/null || true
+            fi
+        fi
+    fi
+
     # Auto-detect credentials: cloudflared creates ~/.cloudflared/<UUID>.json
-    if [[ -d /root/.cloudflared ]]; then
+    if [[ ! -f "$credentials_path" && -d /root/.cloudflared ]]; then
         local creds_found=""
         for f in /root/.cloudflared/*.json; do
             [[ -f "$f" ]] || continue
