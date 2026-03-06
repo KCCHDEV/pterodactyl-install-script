@@ -146,9 +146,18 @@ setup_named_tunnel() {
     mkdir -p /etc/cloudflared
 
     # Auto-setup: if user has logged in, run create + route dns automatically
-    if [[ -f /root/.cloudflared/cert.pem ]] && [[ ! -f "$credentials_path" ]]; then
+    local cert_locations=("/root/.cloudflared/cert.pem" "/etc/cloudflared/cert.pem")
+    local has_login=""
+    for c in "${cert_locations[@]}"; do
+        [[ -f "$c" ]] && has_login=1 && break
+    done
+    [[ -z "$has_login" ]] && cloudflared tunnel list &>/dev/null && has_login=1
+    if [[ -z "$has_login" ]] && [[ ! -f "$credentials_path" ]]; then
+        log_info "Auto-setup skipped: run 'cloudflared tunnel login' first"
+    fi
+    if [[ -n "$has_login" ]] && [[ ! -f "$credentials_path" ]]; then
         log_info "Cloudflare login detected. Creating tunnel and DNS route automatically..."
-        if cloudflared tunnel create "$tunnel_name" --credentials-file "$credentials_path" 2>/dev/null; then
+        if cloudflared tunnel create "$tunnel_name" --credentials-file "$credentials_path"; then
             log_success "Tunnel created"
         else
             # Tunnel may already exist - try to get credentials from existing tunnel
@@ -157,13 +166,19 @@ setup_named_tunnel() {
             if [[ -n "$tunnel_id" && -f "/root/.cloudflared/${tunnel_id}.json" ]]; then
                 cp "/root/.cloudflared/${tunnel_id}.json" "$credentials_path"
                 log_success "Using existing tunnel credentials"
+            else
+                log_warn "Auto-setup: tunnel create failed. Run manual steps above."
             fi
         fi
         if [[ -f "$credentials_path" ]]; then
-            if cloudflared tunnel route dns "$tunnel_name" "$domain" 2>/dev/null; then
+            if cloudflared tunnel route dns "$tunnel_name" "$domain"; then
                 log_success "DNS route created: $domain -> $tunnel_name"
             else
-                cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns 2>/dev/null || true
+                if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns; then
+                    log_success "DNS route created: $domain -> $tunnel_name"
+                else
+                    log_warn "Auto-setup: route dns failed. Ensure domain $domain is in Cloudflare."
+                fi
             fi
         fi
     fi
