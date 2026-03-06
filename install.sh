@@ -18,7 +18,10 @@ if [[ -z "$INSTALLER_ROOT" || ! -d "$INSTALLER_ROOT/lib" ]]; then
     log_bootstrap() { echo "[INFO] $*"; }
     log_bootstrap "Downloading installer from GitHub..."
     TMP_DIR=$(mktemp -d)
-    curl -sSL "${GITHUB_REPO}/archive/main.tar.gz" | tar xz -C "$TMP_DIR"
+    # Fetch latest commit SHA to bypass CDN cache (~5 min)
+    LATEST_SHA=$(curl -sSL "https://api.github.com/repos/KCCHDEV/pterodactyl-install-script/commits/main" 2>/dev/null | grep -o '"sha":[[:space:]]*"[a-f0-9]*"' | head -1 | sed 's/.*"\([a-f0-9]*\)".*/\1/')
+    ARCHIVE_REF="${LATEST_SHA:-main}"
+    curl -sSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${GITHUB_REPO}/archive/${ARCHIVE_REF}.tar.gz" | tar xz -C "$TMP_DIR"
     EXTRACTED=$(ls -d "$TMP_DIR"/*/ 2>/dev/null | head -1)
     if [[ -n "$EXTRACTED" && -d "$EXTRACTED" ]]; then
         exec bash "$EXTRACTED/install.sh"
