@@ -95,7 +95,9 @@ switch_to_cloudflare_proxy() {
 }
 
 switch_to_cftunnel() {
-    local cf_type="${1:-a}"
+    local cf_type
+    cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
+    [[ "$cf_type" != "b" ]] && cf_type="a"
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
 

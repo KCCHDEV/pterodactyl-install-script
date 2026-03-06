@@ -96,7 +96,13 @@ prompt_inputs() {
         echo "  [a] Quick Tunnel - Free, no account, get xxx.trycloudflare.com URL"
         echo "  [b] Named Tunnel - Use your domain, requires Cloudflare account"
         prompt_read "Enter a or b: "
-        CF_TUNNEL_TYPE="${REPLY:-a}"
+        CF_TUNNEL_TYPE=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+        [[ "$CF_TUNNEL_TYPE" != "b" ]] && CF_TUNNEL_TYPE="a"
+        if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
+            log_info "Selected: Named Tunnel (your domain)"
+        else
+            log_info "Selected: Quick Tunnel (trycloudflare.com)"
+        fi
     fi
 
     if [[ "$INSTALL_MODE" == "4" ]]; then
@@ -325,7 +331,15 @@ run_switch_mode() {
             echo "  [a] Quick Tunnel (trycloudflare.com)"
             echo "  [b] Named Tunnel (your domain)"
             prompt_read "Enter a or b: "
-            switch_to_cftunnel "${REPLY:-a}"
+            local tunnel_choice
+            tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
+            if [[ "$tunnel_choice" == "b" ]]; then
+                log_info "Selected: Named Tunnel (your domain)"
+            else
+                log_info "Selected: Quick Tunnel (trycloudflare.com)"
+            fi
+            switch_to_cftunnel "$tunnel_choice"
             ;;
         4) switch_to_cloudflare_proxy ;;
         5) return 0 ;;
