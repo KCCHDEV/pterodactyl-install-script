@@ -82,12 +82,64 @@ CFTUNNEL
     [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
 }
 
+setup_quick_tunnel_to_port() {
+    # Quick tunnel pointing to custom port (e.g. 8080 for NPM backend)
+    local port="${1:-80}"
+    local tunnel_url=""
+    {
+    log_info "Starting Quick Tunnel to 127.0.0.1:$port..."
+
+    install_cloudflared
+
+    pkill -f "cloudflared tunnel" 2>/dev/null || true
+    sleep 1
+
+    rm -f /etc/cloudflared/config.yml /root/.cloudflared/config.yml 2>/dev/null
+    mkdir -p /etc/cloudflared
+
+    cat > "$CLOUDFLARED_SERVICE" << CFTUNNEL
+[Unit]
+Description=Cloudflare Quick Tunnel for Pterodactyl (port $port)
+After=network.target nginx.service
+
+[Service]
+Type=simple
+WorkingDirectory=/tmp
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:$port
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+CFTUNNEL
+
+    systemctl daemon-reload
+    systemctl enable cloudflared-tunnel
+    systemctl start cloudflared-tunnel
+
+    log_info "Waiting for tunnel URL..."
+    for _ in 1 2 3 4 5; do
+        sleep 3
+        tunnel_url=$(journalctl -u cloudflared-tunnel -n 100 --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
+        [[ -n "$tunnel_url" ]] && break
+    done
+
+    if [[ -n "$tunnel_url" ]]; then
+        log_success "Quick Tunnel: $tunnel_url"
+    else
+        log_warn "Run 'journalctl -u cloudflared-tunnel -f' to see your tunnel URL"
+    fi
+    } >&2
+    [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
+}
+
 setup_named_tunnel() {
     local tunnel_name="${1:-pterodactyl-panel}"
     local domain="${2}"
+    local port="${3:-80}"
     local credentials_path="/etc/cloudflared/${tunnel_name}.json"
 
-    log_info "Setting up Named Tunnel: $tunnel_name for $domain..."
+    log_info "Setting up Named Tunnel: $tunnel_name for $domain (->127.0.0.1:$port)..."
 
     install_cloudflared
 
@@ -119,7 +171,7 @@ credentials-file: $credentials_path
 
 ingress:
   - hostname: $domain
-    service: http://127.0.0.1:80
+    service: http://127.0.0.1:$port
   - service: http_status:404
 EOF
 

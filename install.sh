@@ -507,6 +507,51 @@ NGINXLOCAL
     systemctl reload nginx
     log_success "Nginx localhost config created (CF Tunnel mode)" >&2
 }
+
+create_nginx_npm_backend() {
+    # For Nginx Proxy Manager - listen on 127.0.0.1:8080 only
+    # NPM proxies to this backend (add Proxy Host: domain -> 127.0.0.1:8080)
+    local domain="${1:-localhost}"
+    local port="${2:-8080}"
+    log_info "Creating Nginx backend for NPM (127.0.0.1:$port)..." >&2
+
+    cat > "$NGINX_AVAILABLE" << NGINXNPM
+server {
+    listen 127.0.0.1:$port;
+    server_name $domain localhost;
+
+    root $PANEL_PATH/public;
+    index index.php;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param PHP_VALUE "upload_max_filesize=100M \n post_max_size=100M";
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param HTTP_PROXY "";
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+        fastcgi_read_timeout 300;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+}
+NGINXNPM
+
+    ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    nginx -t
+    systemctl reload nginx
+    log_success "Nginx NPM backend created (127.0.0.1:$port)" >&2
+}
 # Pterodactyl Panel Installer - Follows official doc 100%
 # https://pterodactyl.io/panel/1.0/getting_started.html
 
@@ -647,6 +692,7 @@ WINGS_BINARY="/usr/local/bin/wings"
 install_wings() {
     local panel_url="${1}"
     local wings_token="${2}"
+    local backend_port="${3:-}"
     local token_id token_value
 
     log_info "Installing Wings..."
@@ -669,13 +715,10 @@ install_wings() {
         token_id=""
     fi
 
-    # API config - panel on same machine
-    local api_port="80"
+    # API config - panel on same machine (internal HTTP)
+    # backend_port: 8080 for NPM mode, 80 for Tunnel mode
+    local api_port="${backend_port:-80}"
     local ssl_enabled="false"
-    if [[ "$panel_url" == https://* ]]; then
-        api_port="443"
-        ssl_enabled="true"
-    fi
 
     log_info "Creating Wings configuration..."
     cat > "$WINGS_CONFIG" << WINGSCFG
@@ -827,12 +870,64 @@ CFTUNNEL
     [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
 }
 
+setup_quick_tunnel_to_port() {
+    # Quick tunnel pointing to custom port (e.g. 8080 for NPM backend)
+    local port="${1:-80}"
+    local tunnel_url=""
+    {
+    log_info "Starting Quick Tunnel to 127.0.0.1:$port..."
+
+    install_cloudflared
+
+    pkill -f "cloudflared tunnel" 2>/dev/null || true
+    sleep 1
+
+    rm -f /etc/cloudflared/config.yml /root/.cloudflared/config.yml 2>/dev/null
+    mkdir -p /etc/cloudflared
+
+    cat > "$CLOUDFLARED_SERVICE" << CFTUNNEL
+[Unit]
+Description=Cloudflare Quick Tunnel for Pterodactyl (port $port)
+After=network.target nginx.service
+
+[Service]
+Type=simple
+WorkingDirectory=/tmp
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:$port
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+CFTUNNEL
+
+    systemctl daemon-reload
+    systemctl enable cloudflared-tunnel
+    systemctl start cloudflared-tunnel
+
+    log_info "Waiting for tunnel URL..."
+    for _ in 1 2 3 4 5; do
+        sleep 3
+        tunnel_url=$(journalctl -u cloudflared-tunnel -n 100 --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
+        [[ -n "$tunnel_url" ]] && break
+    done
+
+    if [[ -n "$tunnel_url" ]]; then
+        log_success "Quick Tunnel: $tunnel_url"
+    else
+        log_warn "Run 'journalctl -u cloudflared-tunnel -f' to see your tunnel URL"
+    fi
+    } >&2
+    [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
+}
+
 setup_named_tunnel() {
     local tunnel_name="${1:-pterodactyl-panel}"
     local domain="${2}"
+    local port="${3:-80}"
     local credentials_path="/etc/cloudflared/${tunnel_name}.json"
 
-    log_info "Setting up Named Tunnel: $tunnel_name for $domain..."
+    log_info "Setting up Named Tunnel: $tunnel_name for $domain (->127.0.0.1:$port)..."
 
     install_cloudflared
 
@@ -864,7 +959,7 @@ credentials-file: $credentials_path
 
 ingress:
   - hostname: $domain
-    service: http://127.0.0.1:80
+    service: http://127.0.0.1:$port
   - service: http_status:404
 EOF
 
@@ -900,7 +995,7 @@ stop_cloudflared_tunnel() {
     pkill -f "cloudflared tunnel" 2>/dev/null || true
     log_info "Cloudflared tunnel stopped"
 }
-# Pterodactyl Panel - Switch Mode (HTTP / HTTPS / CF Tunnel)
+# Pterodactyl Panel - Switch Mode (Tunnel / NPM / NPM+Tunnel)
 # Switch between modes for existing panel installation
 
 
@@ -919,7 +1014,7 @@ load_switch_context() {
     SSL_KEY_PATH=$(get_json_value "$SETTINGS_JSON_PATH" "ssl_key_path")
     PANEL_PATH="${PANEL_PATH:-/var/www/pterodactyl}"
 
-    # Get current install_mode (1=HTTP, 2=HTTPS, 3=CF, 4=CF Proxy)
+    # Get current install_mode (1=Tunnel, 2=NPM, 3=NPM+Tunnel)
     local mode_line
     mode_line=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | head -1)
     CURRENT_MODE=$(echo "$mode_line" | sed 's/.*:[[:space:]]*"\(.*\)"/\1/')
@@ -936,64 +1031,22 @@ stop_cloudflared_if_active() {
     fi
 }
 
-switch_to_http() {
-    load_switch_context
-    log_info "Switching to HTTP mode..."
-    stop_cloudflared_if_active
-    create_nginx_http "$FQDN"
-    local new_url="http://${FQDN}"
-    sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env"
-    update_settings_mode "1" "$new_url" ""
-    log_success "Switched to HTTP. Panel URL: $new_url"
+update_wings_api_port() {
+    local port="${1:-80}"
+    [[ ! -f "$WINGS_CONFIG" ]] && return 0
+    sed -i "s/port: [0-9]*/port: $port/" "$WINGS_CONFIG" 2>/dev/null || true
+    systemctl restart wings 2>/dev/null || true
 }
 
-switch_to_https() {
-    load_switch_context
-    log_info "Switching to HTTPS mode (Let's Encrypt)..."
-    install_certbot 2>/dev/null || true
-    stop_cloudflared_if_active
-    create_nginx_https "$FQDN" "$ADMIN_EMAIL"
-    local new_url="https://${FQDN}"
-    sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env"
-    update_settings_mode "2" "$new_url" ""
-    log_success "Switched to HTTPS. Panel URL: $new_url"
-}
-
-switch_to_cloudflare_proxy() {
-    load_switch_context
-    log_info "Switching to Cloudflare Proxy mode..."
-
-    local cert_path="${SSL_CERT_PATH:-/etc/ssl/cert.pem}"
-    local key_path="${SSL_KEY_PATH:-/etc/ssl/key.pem}"
-
-    if [[ -e /dev/tty ]]; then
-        read -rp "SSL cert path [$cert_path]: " < /dev/tty || true
-        [[ -n "$REPLY" ]] && cert_path="$REPLY"
-        read -rp "SSL key path [$key_path]: " < /dev/tty || true
-        [[ -n "$REPLY" ]] && key_path="$REPLY"
-        if [[ ! -f "$cert_path" ]] || [[ ! -f "$key_path" ]]; then
-            read -rp "Certificate not found. Generate self-signed SSL? [Y/n]: " < /dev/tty || true
-            if [[ "${REPLY:-Y}" =~ ^[yY] ]]; then
-                generate_self_signed_ssl "$cert_path" "$key_path" "$FQDN"
-            fi
-        fi
-    fi
-
-    stop_cloudflared_if_active
-    create_nginx_cloudflare_proxy "$FQDN" "$cert_path" "$key_path"
-
-    local new_url="https://${FQDN}"
-    sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env"
-    update_settings_mode "4" "$new_url" "" "$cert_path" "$key_path"
-    log_success "Switched to Cloudflare Proxy. Panel URL: $new_url"
-}
-
-switch_to_cftunnel() {
+switch_to_tunnel() {
     local cf_type
     cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
     [[ "$cf_type" != "b" ]] && cf_type="a"
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
+
+    # Stop old tunnel when reconfiguring (from mode 1 or 3)
+    [[ "$CURRENT_MODE" == "1" || "$CURRENT_MODE" == "3" ]] && stop_cloudflared_if_active
 
     log_info "Switching to Cloudflare Tunnel mode..." >&2
     create_nginx_localhost "$FQDN"
@@ -1002,7 +1055,8 @@ switch_to_cftunnel() {
         setup_named_tunnel "pterodactyl-panel" "$FQDN"
         local new_url="https://${FQDN}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
-        update_settings_mode "3" "$new_url" "b"
+        update_settings_mode "1" "$new_url" "b"
+        update_wings_api_port "80"
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         log_success "Named tunnel. Panel URL: $new_url"
     else
@@ -1010,10 +1064,63 @@ switch_to_cftunnel() {
         tunnel_url=$(setup_quick_tunnel)
         local new_url="${tunnel_url:-https://xxx.trycloudflare.com}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
-        update_settings_mode "3" "$new_url" "a"
+        update_settings_mode "1" "$new_url" "a"
+        update_wings_api_port "80"
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         log_success "Quick Tunnel: $new_url"
     fi
+}
+
+switch_to_cftunnel() {
+    switch_to_tunnel "$@"
+}
+
+switch_to_npm() {
+    load_switch_context
+    log_info "Switching to Nginx Proxy Manager mode..." >&2
+    stop_cloudflared_if_active
+    create_nginx_npm_backend "$FQDN" "8080"
+    local new_url="https://${FQDN}"
+    sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env"
+    grep -q "^TRUSTED_PROXIES=" "$PANEL_PATH/.env" 2>/dev/null || echo "TRUSTED_PROXIES=127.0.0.1" >> "$PANEL_PATH/.env"
+    sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
+    update_settings_mode "2" "$new_url" ""
+    update_wings_api_port "8080"
+    sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
+    log_success "NPM mode. Add Proxy Host: $FQDN -> 127.0.0.1:8080"
+}
+
+switch_to_npm_tunnel() {
+    local cf_type
+    cf_type=$(echo "${1:-a}" | tr '[:upper:]' '[:lower:]')
+    [[ "$cf_type" != "b" ]] && cf_type="a"
+    load_switch_context
+    CF_TUNNEL_TYPE="$cf_type"
+
+    log_info "Switching to NPM + Tunnel mode..." >&2
+    stop_cloudflared_if_active
+    create_nginx_npm_backend "$FQDN" "8080"
+    grep -q "^TRUSTED_PROXIES=" "$PANEL_PATH/.env" 2>/dev/null || echo "TRUSTED_PROXIES=127.0.0.1" >> "$PANEL_PATH/.env"
+    sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
+
+    if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
+        setup_named_tunnel "pterodactyl-panel" "$FQDN" "8080"
+        local new_url="https://${FQDN} (NPM + CF tunnel)"
+        sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
+        update_settings_mode "3" "$new_url" "b"
+        update_wings_api_port "8080"
+        log_success "Named tunnel + NPM. Panel URL: $new_url"
+    else
+        local tunnel_url
+        tunnel_url=$(setup_quick_tunnel_to_port "8080")
+        local new_url="https://${FQDN} (NPM) + ${tunnel_url:-https://xxx.trycloudflare.com} (Tunnel)"
+        [[ -z "$tunnel_url" ]] && new_url="https://${FQDN} (NPM) + (journalctl -u cloudflared-tunnel -f for Tunnel)"
+        sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
+        update_settings_mode "3" "$new_url" "a"
+        update_wings_api_port "8080"
+        log_success "NPM + Quick Tunnel: $new_url"
+    fi
+    sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
 }
 
 update_settings_mode() {
@@ -1030,9 +1137,8 @@ update_settings_mode() {
     # Update install_mode and panel_url in JSON (simple sed replacement)
     sed -i "s|\"install_mode\":[[:space:]]*\"[^\"]*\"|\"install_mode\": \"$mode\"|" "$SETTINGS_JSON_PATH"
     sed -i "s|\"panel_url\":[[:space:]]*\"[^\"]*\"|\"panel_url\": \"$panel_url\"|" "$SETTINGS_JSON_PATH"
-    if [[ -n "$cf_type" ]]; then
-        sed -i "s|\"cf_tunnel_type\":[[:space:]]*\"[^\"]*\"|\"cf_tunnel_type\": \"$cf_type\"|" "$SETTINGS_JSON_PATH" 2>/dev/null || true
-    fi
+    # Always update cf_tunnel_type (empty string for NPM mode 2)
+    sed -i "s|\"cf_tunnel_type\":[[:space:]]*\"[^\"]*\"|\"cf_tunnel_type\": \"$cf_type\"|" "$SETTINGS_JSON_PATH" 2>/dev/null || true
     if [[ -n "$cert_path" ]] && grep -q '"ssl_cert_path"' "$SETTINGS_JSON_PATH" 2>/dev/null; then
         sed -i "s|\"ssl_cert_path\":[[:space:]]*\"[^\"]*\"|\"ssl_cert_path\": \"$(echo "$cert_path" | sed 's/\\/\\\\/g; s/"/\\"/g')\"|" "$SETTINGS_JSON_PATH"
     fi
@@ -1092,14 +1198,13 @@ prompt_inputs() {
 
     echo ""
     echo "Install Mode:"
-    echo "  [1] HTTP  - Development, no SSL"
-    echo "  [2] HTTPS - Let's Encrypt SSL (domain must point to this server)"
-    echo "  [3] Cloudflare Tunnel - No port open, use trycloudflare.com or your domain"
-    echo "  [4] Cloudflare Proxy - Orange cloud + Origin SSL (custom cert path)"
-    prompt_read "Enter 1-4: "
+    echo "  [1] Panel + Wings on Tunnel - Cloudflare (no port open)"
+    echo "  [2] Panel + Wings on Nginx Proxy Manager - Add Proxy Host in NPM"
+    echo "  [3] Panel + Wings on NPM + Tunnel - NPM domain + trycloudflare.com"
+    prompt_read "Enter 1-3: "
     INSTALL_MODE="${REPLY:-1}"
 
-    if [[ "$INSTALL_MODE" == "3" ]]; then
+    if [[ "$INSTALL_MODE" == "1" ]] || [[ "$INSTALL_MODE" == "3" ]]; then
         echo "  [a] Quick Tunnel - Free, no account, get xxx.trycloudflare.com URL"
         echo "  [b] Named Tunnel - Use your domain, requires Cloudflare account"
         prompt_read "Enter a or b: "
@@ -1109,19 +1214,6 @@ prompt_inputs() {
             log_info "Selected: Named Tunnel (your domain)"
         else
             log_info "Selected: Quick Tunnel (trycloudflare.com)"
-        fi
-    fi
-
-    if [[ "$INSTALL_MODE" == "4" ]]; then
-        prompt_read "SSL cert path [/etc/ssl/cert.pem]: "
-        SSL_CERT_PATH="${REPLY:-/etc/ssl/cert.pem}"
-        prompt_read "SSL key path [/etc/ssl/key.pem]: "
-        SSL_KEY_PATH="${REPLY:-/etc/ssl/key.pem}"
-        if [[ ! -f "$SSL_CERT_PATH" ]] || [[ ! -f "$SSL_KEY_PATH" ]]; then
-            prompt_read "Certificate not found. Generate self-signed SSL? [Y/n]: "
-            if [[ "${REPLY:-Y}" =~ ^[yY] ]]; then
-                generate_self_signed_ssl "$SSL_CERT_PATH" "$SSL_KEY_PATH" "$FQDN"
-            fi
         fi
     fi
 
@@ -1137,17 +1229,16 @@ prompt_inputs() {
 
     # Set APP_URL based on mode
     case "$INSTALL_MODE" in
-        1) APP_URL="http://${FQDN}" ;;
-        2) APP_URL="https://${FQDN}" ;;
-        3)
+        1)
             if [[ "$CF_TUNNEL_TYPE" == "a" ]]; then
                 APP_URL="https://placeholder.trycloudflare.com"
             else
                 APP_URL="https://${FQDN}"
             fi
             ;;
-        4) APP_URL="https://${FQDN}" ;;
-        *) APP_URL="http://${FQDN}" ;;
+        2) APP_URL="https://${FQDN}" ;;
+        3) APP_URL="https://${FQDN}" ;;
+        *) APP_URL="https://placeholder.trycloudflare.com" ;;
     esac
 
     # Save config for lib scripts and persist for retry on error
@@ -1258,6 +1349,7 @@ main_menu() {
     echo "${REPLY:-1}"
 }
 
+
 run_remove() { run_uninstall_inline; }
 
 run_remove_and_install() {
@@ -1290,10 +1382,9 @@ run_switch_mode() {
 
     local mode_name
     case "$current_mode" in
-        1) mode_name="HTTP" ;;
-        2) mode_name="HTTPS" ;;
-        3) mode_name="Cloudflare Tunnel" ;;
-        4) mode_name="Cloudflare Proxy" ;;
+        1) mode_name="Tunnel" ;;
+        2) mode_name="NPM" ;;
+        3) mode_name="NPM+Tunnel" ;;
         *) mode_name="Unknown" ;;
     esac
 
@@ -1301,18 +1392,30 @@ run_switch_mode() {
     echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
     echo ""
     echo "  Switch to:"
-    echo "  [1] HTTP  - Development, no SSL"
-    echo "  [2] HTTPS - Let's Encrypt SSL"
-    echo "  [3] Cloudflare Tunnel"
-    echo "  [4] Cloudflare Proxy - Orange cloud + Origin SSL"
-    echo "  [5] Back to main menu"
+    echo "  [1] Tunnel - Panel + Wings on Cloudflare Tunnel"
+    echo "  [2] NPM - Panel + Wings on Nginx Proxy Manager"
+    echo "  [3] NPM + Tunnel - Both NPM domain and trycloudflare.com"
+    echo "  [4] Back to main menu"
     echo ""
-    prompt_read "Enter 1-5: "
-    local choice="${REPLY:-5}"
+    prompt_read "Enter 1-4: "
+    local choice="${REPLY:-4}"
 
     case "$choice" in
-        1) switch_to_http ;;
-        2) switch_to_https ;;
+        1)
+            echo "  [a] Quick Tunnel (trycloudflare.com)"
+            echo "  [b] Named Tunnel (your domain)"
+            prompt_read "Enter a or b: "
+            local tunnel_choice
+            tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
+            if [[ "$tunnel_choice" == "b" ]]; then
+                log_info "Selected: Named Tunnel (your domain)"
+            else
+                log_info "Selected: Quick Tunnel (trycloudflare.com)"
+            fi
+            switch_to_tunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
+            ;;
+        2) switch_to_npm || { log_error "Switch failed." >&2; return 1; } ;;
         3)
             echo "  [a] Quick Tunnel (trycloudflare.com)"
             echo "  [b] Named Tunnel (your domain)"
@@ -1325,10 +1428,9 @@ run_switch_mode() {
             else
                 log_info "Selected: Quick Tunnel (trycloudflare.com)"
             fi
-            switch_to_cftunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
+            switch_to_npm_tunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
             ;;
-        4) switch_to_cloudflare_proxy ;;
-        5) return 0 ;;
+        4) return 0 ;;
         *) log_error "Invalid choice"; return 1 ;;
     esac
 
@@ -1343,9 +1445,19 @@ run_install_wings_only() {
         exit 1
     fi
 
-    local panel_url
+    local panel_url backend_port
     panel_url=$(get_json_value "$SETTINGS_JSON_PATH" "panel_url")
     panel_url="${panel_url:-http://localhost}"
+
+    # Use correct API port and URL by install_mode
+    local mode fqdn
+    mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
+    [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080" || backend_port="80"
+    # Mode 3: use clean FQDN as panel URL (not the combined NPM+Tunnel string)
+    if [[ "$mode" == "3" ]]; then
+        fqdn=$(get_json_value "$SETTINGS_JSON_PATH" "fqdn")
+        [[ -n "$fqdn" ]] && panel_url="https://${fqdn}"
+    fi
 
     if [[ -x "$WINGS_BINARY" ]]; then
         log_warn "Wings already installed at $WINGS_BINARY"
@@ -1354,7 +1466,7 @@ run_install_wings_only() {
     fi
 
     log_info "Installing Wings..."
-    install_wings "$panel_url" ""
+    install_wings "$panel_url" "" "$backend_port"
     systemctl enable wings 2>/dev/null || true
     systemctl start wings 2>/dev/null || true
 
@@ -1471,10 +1583,8 @@ run_install() {
         install_docker=0
     fi
 
-    # Dependencies
-    local need_ssl=0
-    [[ "$INSTALL_MODE" == "2" ]] && need_ssl=1
-    install_all_dependencies "$need_ssl" "$install_docker"
+    # Dependencies (no certbot for new modes - NPM/Tunnel handle SSL)
+    install_all_dependencies "0" "$install_docker"
 
     # Database
     create_database
@@ -1482,35 +1592,50 @@ run_install() {
     # Panel
     install_panel "$DB_NAME" "$DB_USER" "$DB_PASSWORD" "$APP_URL" ""
 
-    # Nginx
+    # Nginx + Tunnel
+    local WINGS_API_PORT="80"
     case "$INSTALL_MODE" in
         1)
-            create_nginx_http "$FQDN"
-            FINAL_PANEL_URL="http://${FQDN}"
-            ;;
-        2)
-            create_nginx_https "$FQDN" "$ADMIN_EMAIL"
-            FINAL_PANEL_URL="https://${FQDN}"
-            ;;
-        3)
             create_nginx_localhost "$FQDN"
             if [[ "$CF_TUNNEL_TYPE" == "a" ]]; then
                 local tunnel_url
                 tunnel_url=$(setup_quick_tunnel)
-                FINAL_PANEL_URL="${tunnel_url:-https://xxx.trycloudflare.com}"
-                [[ -z "$tunnel_url" ]] && FINAL_PANEL_URL="(run: journalctl -u cloudflared-tunnel -f to see URL)"
+                FINAL_PANEL_URL="${tunnel_url:-https://placeholder.trycloudflare.com}"
+                [[ -z "$tunnel_url" ]] && log_warn "Run 'journalctl -u cloudflared-tunnel -f' to see your tunnel URL"
             else
                 setup_named_tunnel "pterodactyl-panel" "$FQDN"
                 FINAL_PANEL_URL="https://${FQDN} (complete CF tunnel login first)"
             fi
             ;;
-        4)
-            create_nginx_cloudflare_proxy "$FQDN" "${SSL_CERT_PATH:-/etc/ssl/cert.pem}" "${SSL_KEY_PATH:-/etc/ssl/key.pem}"
+        2)
+            create_nginx_npm_backend "$FQDN" "8080"
             FINAL_PANEL_URL="https://${FQDN}"
+            WINGS_API_PORT="8080"
+            # Add TRUSTED_PROXIES for NPM
+            grep -q "^TRUSTED_PROXIES=" "$PANEL_PATH/.env" 2>/dev/null || echo "TRUSTED_PROXIES=127.0.0.1" >> "$PANEL_PATH/.env"
+            sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
+            log_info "Add Proxy Host in NPM: $FQDN -> 127.0.0.1:8080"
+            ;;
+        3)
+            create_nginx_npm_backend "$FQDN" "8080"
+            WINGS_API_PORT="8080"
+            grep -q "^TRUSTED_PROXIES=" "$PANEL_PATH/.env" 2>/dev/null || echo "TRUSTED_PROXIES=127.0.0.1" >> "$PANEL_PATH/.env"
+            sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
+            if [[ "$CF_TUNNEL_TYPE" == "a" ]]; then
+                local tunnel_url
+                tunnel_url=$(setup_quick_tunnel_to_port "8080")
+                FINAL_PANEL_URL="https://${FQDN} (NPM) + ${tunnel_url:-https://xxx.trycloudflare.com} (Tunnel)"
+                [[ -z "$tunnel_url" ]] && FINAL_PANEL_URL="https://${FQDN} (NPM) + (run: journalctl -u cloudflared-tunnel -f for Tunnel URL)"
+            else
+                setup_named_tunnel "pterodactyl-panel" "$FQDN" "8080"
+                FINAL_PANEL_URL="https://${FQDN} (NPM + CF tunnel)"
+            fi
             ;;
         *)
-            create_nginx_http "$FQDN"
-            FINAL_PANEL_URL="http://${FQDN}"
+            create_nginx_localhost "$FQDN"
+            local tunnel_url
+            tunnel_url=$(setup_quick_tunnel)
+            FINAL_PANEL_URL="${tunnel_url:-https://xxx.trycloudflare.com}"
             ;;
     esac
 
@@ -1519,7 +1644,9 @@ run_install() {
 
     local wings_installed=false
     if [[ "$INSTALL_WINGS" == "y" || "$INSTALL_WINGS" == "Y" || "$INSTALL_WINGS" == "yes" || -z "$INSTALL_WINGS" ]]; then
-        install_wings "$FINAL_PANEL_URL" ""
+        local wings_remote_url="$FINAL_PANEL_URL"
+        [[ "$INSTALL_MODE" == "3" ]] && wings_remote_url="https://${FQDN}"
+        install_wings "$wings_remote_url" "" "$WINGS_API_PORT"
         systemctl enable wings 2>/dev/null || true
         wings_installed=true
     else
@@ -1529,6 +1656,7 @@ run_install() {
     save_settings_json "$FINAL_PANEL_URL" "$wings_installed"
     save_credentials "$FINAL_PANEL_URL"
 
+    # Copy installer to /opt for uninstall/cleaner access
 
     mkdir -p /opt/pterodactyl-install-script
     if [[ -f "${BASH_SOURCE[0]}" ]]; then
@@ -1557,6 +1685,7 @@ run_install() {
     fi
     echo ""
 }
+
 run_uninstall_inline() {
     local skip_confirm="${1:-}"
     WINGS_INSTALLED=true

@@ -214,3 +214,48 @@ NGINXLOCAL
     systemctl reload nginx
     log_success "Nginx localhost config created (CF Tunnel mode)" >&2
 }
+
+create_nginx_npm_backend() {
+    # For Nginx Proxy Manager - listen on 127.0.0.1:8080 only
+    # NPM proxies to this backend (add Proxy Host: domain -> 127.0.0.1:8080)
+    local domain="${1:-localhost}"
+    local port="${2:-8080}"
+    log_info "Creating Nginx backend for NPM (127.0.0.1:$port)..." >&2
+
+    cat > "$NGINX_AVAILABLE" << NGINXNPM
+server {
+    listen 127.0.0.1:$port;
+    server_name $domain localhost;
+
+    root $PANEL_PATH/public;
+    index index.php;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param PHP_VALUE "upload_max_filesize=100M \n post_max_size=100M";
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param HTTP_PROXY "";
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+        fastcgi_read_timeout 300;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+}
+NGINXNPM
+
+    ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    nginx -t
+    systemctl reload nginx
+    log_success "Nginx NPM backend created (127.0.0.1:$port)" >&2
+}

@@ -15,6 +15,7 @@ WINGS_BINARY="/usr/local/bin/wings"
 install_wings() {
     local panel_url="${1}"
     local wings_token="${2}"
+    local backend_port="${3:-}"
     local token_id token_value
 
     log_info "Installing Wings..."
@@ -37,13 +38,10 @@ install_wings() {
         token_id=""
     fi
 
-    # API config - panel on same machine
-    local api_port="80"
+    # API config - panel on same machine (internal HTTP)
+    # backend_port: 8080 for NPM mode, 80 for Tunnel mode
+    local api_port="${backend_port:-80}"
     local ssl_enabled="false"
-    if [[ "$panel_url" == https://* ]]; then
-        api_port="443"
-        ssl_enabled="true"
-    fi
 
     log_info "Creating Wings configuration..."
     cat > "$WINGS_CONFIG" << WINGSCFG
