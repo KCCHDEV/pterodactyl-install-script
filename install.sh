@@ -1638,6 +1638,8 @@ Node Setup (required for game servers):
 CREDS
     chmod 600 "$CREDENTIALS_FILE"
     log_success "Credentials saved to $CREDENTIALS_FILE"
+}
+
 run_install() {
     check_root
     check_os
@@ -1743,7 +1745,7 @@ run_install() {
     save_settings_json "$FINAL_PANEL_URL" "$wings_installed"
     save_credentials "$FINAL_PANEL_URL"
 
-    mkdir -p /opt/pterodactyl-install-script
+        mkdir -p /opt/pterodactyl-install-script
     if [[ -f "${BASH_SOURCE[0]}" ]]; then
         cp "${BASH_SOURCE[0]}" /opt/pterodactyl-install-script/install.sh
     else
@@ -1795,4 +1797,3 @@ run_main() {
 if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ ! -t 0 ]]; then
     run_main
 fi
-}
