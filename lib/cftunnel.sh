@@ -157,18 +157,22 @@ setup_named_tunnel() {
     fi
     if [[ -n "$has_login" ]] && [[ ! -f "$credentials_path" ]]; then
         log_info "Cloudflare login detected. Creating tunnel and DNS route automatically..."
-        if cloudflared tunnel create "$tunnel_name" --credentials-file "$credentials_path"; then
+        local create_out
+        create_out=$(cloudflared tunnel create "$tunnel_name" 2>&1) || true
+        local tunnel_id
+        tunnel_id=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+        if [[ -n "$tunnel_id" && -f "/root/.cloudflared/${tunnel_id}.json" ]]; then
+            cp "/root/.cloudflared/${tunnel_id}.json" "$credentials_path"
             log_success "Tunnel created"
         else
-            # Tunnel may already exist - try to get credentials from existing tunnel
-            local tunnel_id
-            tunnel_id=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-            if [[ -n "$tunnel_id" && -f "/root/.cloudflared/${tunnel_id}.json" ]]; then
-                cp "/root/.cloudflared/${tunnel_id}.json" "$credentials_path"
-                log_success "Using existing tunnel credentials"
-            else
-                log_warn "Auto-setup: tunnel create failed. Run manual steps above."
-            fi
+            for f in /root/.cloudflared/*.json; do
+                [[ -f "$f" ]] || continue
+                cp "$f" "$credentials_path" 2>/dev/null && log_success "Tunnel created" && break
+            done
+        fi
+        if [[ ! -f "$credentials_path" ]]; then
+            log_warn "Auto-setup: tunnel create failed. Run manual steps above."
+            [[ -n "$create_out" ]] && echo "$create_out" | head -5
         fi
         if [[ -f "$credentials_path" ]]; then
             if cloudflared tunnel route dns "$tunnel_name" "$domain"; then
