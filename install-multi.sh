@@ -527,8 +527,13 @@ run_install() {
                 FINAL_PANEL_URL="${tunnel_url:-https://placeholder.trycloudflare.com}"
                 [[ -z "$tunnel_url" ]] && log_warn "Run 'journalctl -u cloudflared-tunnel -f' to see your tunnel URL"
             else
+                NAMED_TUNNEL_READY=0
                 setup_named_tunnel "pterodactyl-panel" "$FQDN"
-                FINAL_PANEL_URL="https://${FQDN} (complete CF tunnel login first)"
+                if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
+                    FINAL_PANEL_URL="https://${FQDN}"
+                else
+                    FINAL_PANEL_URL="https://${FQDN} (after completing steps)"
+                fi
             fi
             ;;
         2)
@@ -551,8 +556,13 @@ run_install() {
                 FINAL_PANEL_URL="https://${FQDN} (NPM) + ${tunnel_url:-https://xxx.trycloudflare.com} (Tunnel)"
                 [[ -z "$tunnel_url" ]] && FINAL_PANEL_URL="https://${FQDN} (NPM) + (run: journalctl -u cloudflared-tunnel -f for Tunnel URL)"
             else
+                NAMED_TUNNEL_READY=0
                 setup_named_tunnel "pterodactyl-panel" "$FQDN" "8080"
-                FINAL_PANEL_URL="https://${FQDN} (NPM + CF tunnel)"
+                if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
+                    FINAL_PANEL_URL="https://${FQDN} (NPM + CF tunnel)"
+                else
+                    FINAL_PANEL_URL="https://${FQDN} (NPM + CF tunnel, after completing steps)"
+                fi
             fi
             ;;
         *)

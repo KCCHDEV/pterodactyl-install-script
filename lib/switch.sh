@@ -65,13 +65,19 @@ switch_to_tunnel() {
     create_nginx_localhost "$FQDN"
 
     if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
+        NAMED_TUNNEL_READY=0
         setup_named_tunnel "pterodactyl-panel" "$FQDN"
         local new_url="https://${FQDN}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
         update_wings_api_port "80"
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
-        log_success "Named tunnel. Panel URL: $new_url"
+        if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
+            log_success "Named tunnel. Panel URL: $new_url"
+        else
+            log_warn "Complete the 5 steps above before the panel will be reachable"
+            log_info "Panel URL (after completing steps): $new_url"
+        fi
     else
         local tunnel_url
         tunnel_url=$(setup_quick_tunnel)
@@ -119,12 +125,18 @@ switch_to_npm_tunnel() {
     sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
 
     if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
+        NAMED_TUNNEL_READY=0
         setup_named_tunnel "pterodactyl-panel" "$FQDN" "8080"
         local new_url="https://${FQDN} (NPM + CF tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "3" "$new_url" "b" "" "" "$FQDN"
         update_wings_api_port "8080"
-        log_success "Named tunnel + NPM. Panel URL: $new_url"
+        if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
+            log_success "Named tunnel + NPM. Panel URL: $new_url"
+        else
+            log_warn "Complete the 5 steps above before the panel will be reachable"
+            log_info "Panel URL (after completing steps): $new_url"
+        fi
     else
         local tunnel_url
         tunnel_url=$(setup_quick_tunnel_to_port "8080")

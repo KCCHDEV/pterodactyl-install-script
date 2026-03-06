@@ -195,8 +195,20 @@ EOF
     if [[ -f "$credentials_path" ]]; then
         systemctl start cloudflared-tunnel 2>/dev/null || true
         log_success "Named tunnel started. Panel URL: https://${domain}"
+        NAMED_TUNNEL_READY=1
     else
-        log_success "Config at $CLOUDFLARED_CONFIG - complete steps above then: systemctl start cloudflared-tunnel"
+        log_warn "Complete the 5 steps above before the panel will be reachable"
+        log_warn "Domain must be added to Cloudflare. Run steps 1-5 in order."
+        log_info "Panel URL (after completing steps): https://${domain}"
+        echo "" >&2
+        log_info "Required steps (run in order):" >&2
+        log_info "  1. cloudflared tunnel login     (opens browser)" >&2
+        log_info "  2. cloudflared tunnel create $tunnel_name" >&2
+        log_info "  3. cloudflared tunnel route dns $tunnel_name $domain" >&2
+        log_info "  4. cp /root/.cloudflared/*.json $credentials_path" >&2
+        log_info "  5. systemctl start cloudflared-tunnel" >&2
+        log_info "Config saved to $CLOUDFLARED_CONFIG" >&2
+        NAMED_TUNNEL_READY=0
     fi
 }
 
