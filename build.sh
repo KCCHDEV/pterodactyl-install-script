@@ -167,8 +167,8 @@ COPY_OPT
     # Completion message and run_install closing brace (589-609)
     sed -n '589,609p' install-multi.sh | sed 's|Uninstall: sudo /opt/pterodactyl-install-script/uninstall.sh|Uninstall: Run script again, choose [5] Remove|'
 
-    # run_main and entry point (611-633)
-    sed -n '611,633p' install-multi.sh
+    # run_main and entry point (611-635)
+    sed -n '611,635p' install-multi.sh
 
     # Workaround: one extra { in inlined libs, add closing } so script parses
     echo '}'

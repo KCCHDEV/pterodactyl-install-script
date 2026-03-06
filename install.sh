@@ -1790,8 +1790,9 @@ run_main() {
 }
 
 # Run when executed (file or curl|bash pipe)
-# When piped, BASH_SOURCE may be empty so we must run main
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
+# - File: BASH_SOURCE[0]==$0
+# - Pipe: BASH_SOURCE empty, or stdin not a TTY
+if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ ! -t 0 ]]; then
     run_main
 fi
 }
