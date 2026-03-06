@@ -32,6 +32,9 @@ install_cloudflared() {
 setup_quick_tunnel() {
     # Quick tunnel - no Cloudflare account needed
     # Returns URL like https://xxx.trycloudflare.com
+    # Progress to stderr so it's visible when output is captured by tunnel_url=$(...)
+    local tunnel_url=""
+    {
     log_info "Starting Quick Tunnel (trycloudflare.com)..."
 
     install_cloudflared
@@ -64,7 +67,6 @@ CFTUNNEL
     systemctl start cloudflared-tunnel
 
     log_info "Waiting for tunnel URL..."
-    local tunnel_url
     for _ in 1 2 3 4 5; do
         sleep 3
         tunnel_url=$(journalctl -u cloudflared-tunnel -n 100 --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
@@ -73,10 +75,11 @@ CFTUNNEL
 
     if [[ -n "$tunnel_url" ]]; then
         log_success "Quick Tunnel: $tunnel_url"
-        echo "$tunnel_url"
     else
         log_warn "Run 'journalctl -u cloudflared-tunnel -f' to see your tunnel URL"
     fi
+    } >&2
+    [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
 }
 
 setup_named_tunnel() {
