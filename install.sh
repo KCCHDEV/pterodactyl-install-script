@@ -1151,6 +1151,77 @@ update_settings_mode() {
         sed -i "s|\"ssl_key_path\":[[:space:]]*\"[^\"]*\"|\"ssl_key_path\": \"$(echo "$key_path" | sed 's/\\/\\\\/g; s/"/\\"/g')\"|" "$SETTINGS_JSON_PATH"
     fi
 }
+run_uninstall_inline() {
+    local skip_confirm="${1:-}"
+    WINGS_INSTALLED=true
+    PANEL_PATH="${PANEL_PATH:-/var/www/pterodactyl}"
+    [[ -f "$SETTINGS_JSON_PATH" ]] && {
+        PANEL_PATH=$(get_json_value "$SETTINGS_JSON_PATH" "panel_path")
+        DB_NAME=$(get_json_value "$SETTINGS_JSON_PATH" "db_name")
+        DB_USER=$(get_json_value "$SETTINGS_JSON_PATH" "db_user")
+        WINGS_VAL=$(grep -o '"wings_installed"[[:space:]]*:[[:space:]]*[a-z]*' "$SETTINGS_JSON_PATH" 2>/dev/null | grep -o 'true\|false' | head -1)
+        [[ "$WINGS_VAL" == "false" ]] && WINGS_INSTALLED=false
+    }
+    PANEL_PATH="${PANEL_PATH:-/var/www/pterodactyl}"
+    [[ -z "$DB_NAME" && -f "$PANEL_PATH/.env" ]] && DB_NAME=$(grep "^DB_DATABASE=" "$PANEL_PATH/.env" 2>/dev/null | cut -d= -f2)
+    [[ -z "$DB_USER" && -f "$PANEL_PATH/.env" ]] && DB_USER=$(grep "^DB_USERNAME=" "$PANEL_PATH/.env" 2>/dev/null | cut -d= -f2)
+    DB_NAME="${DB_NAME:-panel}"
+    DB_USER="${DB_USER:-pterodactyl}"
+
+    if [[ "$skip_confirm" != "yes" ]]; then
+        echo ""; echo "=============================================="; echo "  Pterodactyl Panel UNINSTALLER"; echo "=============================================="; echo ""
+        log_warn "This will PERMANENTLY remove:"
+        echo "  - Panel files ($PANEL_PATH)"
+        [[ "$WINGS_INSTALLED" == "true" ]] && echo "  - Wings daemon"
+        echo "  - Nginx config"; echo "  - Database ($DB_NAME)"; echo "  - Cloudflare tunnel (if installed)"; echo ""
+        [[ -e /dev/tty ]] && read -rp "Type 'yes' or the panel domain to confirm: " confirm < /dev/tty || read -rp "Type 'yes' or the panel domain to confirm: " confirm
+        if [[ "$confirm" != "yes" && "$confirm" != "YES" ]]; then
+            [[ ! -d "$PANEL_PATH" ]] && { log_error "Aborted."; exit 1; }
+            [[ ! "$confirm" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ && "$confirm" != "localhost" ]] && { log_error "Confirmation failed. Aborted."; exit 1; }
+        fi
+        log_info "Proceeding with uninstall..."
+    fi
+
+    log_info "Stopping services..."
+    systemctl stop pteroq 2>/dev/null || true
+    systemctl stop wings 2>/dev/null || true
+    systemctl stop cloudflared-tunnel 2>/dev/null || true
+    systemctl disable pteroq 2>/dev/null || true
+    systemctl disable wings 2>/dev/null || true
+    systemctl disable cloudflared-tunnel 2>/dev/null || true
+    pkill -f "cloudflared tunnel" 2>/dev/null || true
+    log_success "Services stopped"
+
+    [[ -d "$PANEL_PATH" ]] && { log_info "Removing panel files..."; rm -rf "$PANEL_PATH"; log_success "Panel removed"; }
+    [[ -f /etc/systemd/system/pteroq.service ]] && { rm -f /etc/systemd/system/pteroq.service; systemctl daemon-reload; log_success "pteroq removed"; }
+
+    if [[ "$WINGS_INSTALLED" == "true" ]]; then
+        [[ -f "$WINGS_BINARY" ]] && { log_info "Removing Wings..."; rm -f "$WINGS_BINARY"; log_success "Wings removed"; }
+        [[ -d /etc/pterodactyl ]] && { rm -rf /etc/pterodactyl; log_success "Wings config removed"; }
+        [[ -d /var/lib/pterodactyl ]] && { rm -rf /var/lib/pterodactyl; log_success "Wings data removed"; }
+        [[ -f /etc/systemd/system/wings.service ]] && { rm -f /etc/systemd/system/wings.service; systemctl daemon-reload; log_success "wings removed"; }
+        id pterodactyl &>/dev/null && { userdel pterodactyl 2>/dev/null || true; log_success "pterodactyl user removed"; }
+    fi
+
+    [[ -f "$NGINX_ENABLED" || -L "$NGINX_ENABLED" ]] && rm -f "$NGINX_ENABLED"
+    [[ -f "$NGINX_AVAILABLE" ]] && rm -f "$NGINX_AVAILABLE"
+    systemctl reload nginx 2>/dev/null || true
+    log_success "Nginx config removed"
+
+    log_info "Removing database..."
+    mysql -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;" 2>/dev/null || true
+    mysql -e "DROP USER IF EXISTS '$DB_USER'@'127.0.0.1';" 2>/dev/null || true
+    mysql -e "DROP USER IF EXISTS '$DB_USER'@'localhost';" 2>/dev/null || true
+    mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+    log_success "Database removed"
+
+    [[ -f /etc/systemd/system/cloudflared-tunnel.service ]] && { systemctl stop cloudflared-tunnel 2>/dev/null || true; systemctl disable cloudflared-tunnel 2>/dev/null || true; rm -f /etc/systemd/system/cloudflared-tunnel.service; systemctl daemon-reload; pkill -f cloudflared 2>/dev/null || true; log_success "Cloudflare tunnel removed"; }
+    [[ -f "$CREDENTIALS_FILE" ]] && { rm -f "$CREDENTIALS_FILE"; log_success "Credentials removed"; }
+    [[ -f "$SETTINGS_JSON_PATH" ]] && { rm -f "$SETTINGS_JSON_PATH"; log_success "Settings removed"; }
+    [[ -d /opt/pterodactyl-install-script ]] && { rm -rf /opt/pterodactyl-install-script; log_success "Installer copy removed"; }
+    rm -f /root/.pterodactyl-install-config 2>/dev/null && log_success "Saved config removed" || true
+    echo ""; log_success "Uninstall complete."; echo ""
+}
 # Config variables (set by prompt)
 INSTALL_MODE=""
 FQDN=""
@@ -1699,76 +1770,6 @@ run_install() {
         echo "  3. To install Wings later, run the installer again or use install-wings.sh"
     fi
     echo ""
-run_uninstall_inline() {
-    local skip_confirm="${1:-}"
-    WINGS_INSTALLED=true
-    PANEL_PATH="${PANEL_PATH:-/var/www/pterodactyl}"
-    [[ -f "$SETTINGS_JSON_PATH" ]] && {
-        PANEL_PATH=$(get_json_value "$SETTINGS_JSON_PATH" "panel_path")
-        DB_NAME=$(get_json_value "$SETTINGS_JSON_PATH" "db_name")
-        DB_USER=$(get_json_value "$SETTINGS_JSON_PATH" "db_user")
-        WINGS_VAL=$(grep -o '"wings_installed"[[:space:]]*:[[:space:]]*[a-z]*' "$SETTINGS_JSON_PATH" 2>/dev/null | grep -o 'true\|false' | head -1)
-        [[ "$WINGS_VAL" == "false" ]] && WINGS_INSTALLED=false
-    }
-    PANEL_PATH="${PANEL_PATH:-/var/www/pterodactyl}"
-    [[ -z "$DB_NAME" && -f "$PANEL_PATH/.env" ]] && DB_NAME=$(grep "^DB_DATABASE=" "$PANEL_PATH/.env" 2>/dev/null | cut -d= -f2)
-    [[ -z "$DB_USER" && -f "$PANEL_PATH/.env" ]] && DB_USER=$(grep "^DB_USERNAME=" "$PANEL_PATH/.env" 2>/dev/null | cut -d= -f2)
-    DB_NAME="${DB_NAME:-panel}"
-    DB_USER="${DB_USER:-pterodactyl}"
-
-    if [[ "$skip_confirm" != "yes" ]]; then
-        echo ""; echo "=============================================="; echo "  Pterodactyl Panel UNINSTALLER"; echo "=============================================="; echo ""
-        log_warn "This will PERMANENTLY remove:"
-        echo "  - Panel files ($PANEL_PATH)"
-        [[ "$WINGS_INSTALLED" == "true" ]] && echo "  - Wings daemon"
-        echo "  - Nginx config"; echo "  - Database ($DB_NAME)"; echo "  - Cloudflare tunnel (if installed)"; echo ""
-        [[ -e /dev/tty ]] && read -rp "Type 'yes' or the panel domain to confirm: " confirm < /dev/tty || read -rp "Type 'yes' or the panel domain to confirm: " confirm
-        if [[ "$confirm" != "yes" && "$confirm" != "YES" ]]; then
-            [[ ! -d "$PANEL_PATH" ]] && { log_error "Aborted."; exit 1; }
-            [[ ! "$confirm" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ && "$confirm" != "localhost" ]] && { log_error "Confirmation failed. Aborted."; exit 1; }
-        fi
-        log_info "Proceeding with uninstall..."
-    fi
-
-    log_info "Stopping services..."
-    systemctl stop pteroq 2>/dev/null || true
-    systemctl stop wings 2>/dev/null || true
-    systemctl stop cloudflared-tunnel 2>/dev/null || true
-    systemctl disable pteroq 2>/dev/null || true
-    systemctl disable wings 2>/dev/null || true
-    systemctl disable cloudflared-tunnel 2>/dev/null || true
-    pkill -f "cloudflared tunnel" 2>/dev/null || true
-    log_success "Services stopped"
-
-    [[ -d "$PANEL_PATH" ]] && { log_info "Removing panel files..."; rm -rf "$PANEL_PATH"; log_success "Panel removed"; }
-    [[ -f /etc/systemd/system/pteroq.service ]] && { rm -f /etc/systemd/system/pteroq.service; systemctl daemon-reload; log_success "pteroq removed"; }
-
-    if [[ "$WINGS_INSTALLED" == "true" ]]; then
-        [[ -f "$WINGS_BINARY" ]] && { log_info "Removing Wings..."; rm -f "$WINGS_BINARY"; log_success "Wings removed"; }
-        [[ -d /etc/pterodactyl ]] && { rm -rf /etc/pterodactyl; log_success "Wings config removed"; }
-        [[ -d /var/lib/pterodactyl ]] && { rm -rf /var/lib/pterodactyl; log_success "Wings data removed"; }
-        [[ -f /etc/systemd/system/wings.service ]] && { rm -f /etc/systemd/system/wings.service; systemctl daemon-reload; log_success "wings removed"; }
-        id pterodactyl &>/dev/null && { userdel pterodactyl 2>/dev/null || true; log_success "pterodactyl user removed"; }
-    fi
-
-    [[ -f "$NGINX_ENABLED" || -L "$NGINX_ENABLED" ]] && rm -f "$NGINX_ENABLED"
-    [[ -f "$NGINX_AVAILABLE" ]] && rm -f "$NGINX_AVAILABLE"
-    systemctl reload nginx 2>/dev/null || true
-    log_success "Nginx config removed"
-
-    log_info "Removing database..."
-    mysql -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;" 2>/dev/null || true
-    mysql -e "DROP USER IF EXISTS '$DB_USER'@'127.0.0.1';" 2>/dev/null || true
-    mysql -e "DROP USER IF EXISTS '$DB_USER'@'localhost';" 2>/dev/null || true
-    mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
-    log_success "Database removed"
-
-    [[ -f /etc/systemd/system/cloudflared-tunnel.service ]] && { systemctl stop cloudflared-tunnel 2>/dev/null || true; systemctl disable cloudflared-tunnel 2>/dev/null || true; rm -f /etc/systemd/system/cloudflared-tunnel.service; systemctl daemon-reload; pkill -f cloudflared 2>/dev/null || true; log_success "Cloudflare tunnel removed"; }
-    [[ -f "$CREDENTIALS_FILE" ]] && { rm -f "$CREDENTIALS_FILE"; log_success "Credentials removed"; }
-    [[ -f "$SETTINGS_JSON_PATH" ]] && { rm -f "$SETTINGS_JSON_PATH"; log_success "Settings removed"; }
-    [[ -d /opt/pterodactyl-install-script ]] && { rm -rf /opt/pterodactyl-install-script; log_success "Installer copy removed"; }
-    rm -f /root/.pterodactyl-install-config 2>/dev/null && log_success "Saved config removed" || true
-    echo ""; log_success "Uninstall complete."; echo ""
 }
 run_main() {
     check_root
@@ -1793,3 +1794,4 @@ run_main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
     run_main
 fi
+}

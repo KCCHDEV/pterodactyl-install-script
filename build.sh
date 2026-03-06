@@ -46,53 +46,7 @@ HEAD
     strip_lib lib/cftunnel.sh
     strip_lib lib/switch.sh
 
-    # Main from install-multi.sh: lines 39-247 (config through main_menu), skip run_remove/run_remove_and_install
-    sed -n '39,247p' install-multi.sh
-
-    cat << 'REMOVE'
-
-run_remove() { run_uninstall_inline; }
-
-run_remove_and_install() {
-    if ! is_panel_installed; then
-        log_info "Panel not installed. Running Fresh Install..."
-        run_install
-        return 0
-    fi
-    { echo ""; log_warn "This will REMOVE everything (panel, wings, database) then do Fresh Install."; echo ""; } >&2
-    prompt_read "Continue? [y/N]: "
-    if [[ "${REPLY:-n}" != "y" && "${REPLY:-n}" != "Y" ]]; then
-        log_info "Cancelled."
-        return 0
-    fi
-    run_uninstall_inline "yes"
-    echo ""
-    log_info "Starting Fresh Install..."
-    run_install
-}
-REMOVE
-
-    # run_switch_mode through save_credentials (289-475)
-    sed -n '289,475p' install-multi.sh
-
-    # run_install: 478-581 (through save_credentials), skip 583-587 (old copy block)
-    sed -n '478,581p' install-multi.sh
-
-    cat << 'COPY_OPT'
-
-    mkdir -p /opt/pterodactyl-install-script
-    if [[ -f "${BASH_SOURCE[0]}" ]]; then
-        cp "${BASH_SOURCE[0]}" /opt/pterodactyl-install-script/install.sh
-    else
-        curl -sSL "https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/refs/heads/main/install.sh" -o /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
-    fi
-    chmod +x /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
-COPY_OPT
-
-    # Completion message and run_install closing brace (589-608)
-    sed -n '589,608p' install-multi.sh | sed 's|Uninstall: sudo /opt/pterodactyl-install-script/uninstall.sh|Uninstall: Run script again, choose [5] Remove|'
-
-    # run_uninstall_inline
+    # run_uninstall_inline (must be before run_remove which calls it)
     cat << 'UNINSTALL'
 run_uninstall_inline() {
     local skip_confirm="${1:-}"
@@ -167,9 +121,57 @@ run_uninstall_inline() {
 }
 UNINSTALL
 
+    # Main from install-multi.sh: lines 39-247 (config through main_menu), skip run_remove/run_remove_and_install
+    sed -n '39,247p' install-multi.sh
+
+    cat << 'REMOVE'
+
+run_remove() { run_uninstall_inline; }
+
+run_remove_and_install() {
+    if ! is_panel_installed; then
+        log_info "Panel not installed. Running Fresh Install..."
+        run_install
+        return 0
+    fi
+    { echo ""; log_warn "This will REMOVE everything (panel, wings, database) then do Fresh Install."; echo ""; } >&2
+    prompt_read "Continue? [y/N]: "
+    if [[ "${REPLY:-n}" != "y" && "${REPLY:-n}" != "Y" ]]; then
+        log_info "Cancelled."
+        return 0
+    fi
+    run_uninstall_inline "yes"
+    echo ""
+    log_info "Starting Fresh Install..."
+    run_install
+}
+REMOVE
+
+    # run_switch_mode through save_credentials (289-475)
+    sed -n '289,475p' install-multi.sh
+
+    # run_install: 478-581 (through save_credentials), skip 583-587 (old copy block)
+    sed -n '478,581p' install-multi.sh
+
+    cat << 'COPY_OPT'
+
+    mkdir -p /opt/pterodactyl-install-script
+    if [[ -f "${BASH_SOURCE[0]}" ]]; then
+        cp "${BASH_SOURCE[0]}" /opt/pterodactyl-install-script/install.sh
+    else
+        curl -sSL "https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/refs/heads/main/install.sh" -o /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
+    fi
+    chmod +x /opt/pterodactyl-install-script/install.sh 2>/dev/null || true
+COPY_OPT
+
+    # Completion message and run_install closing brace (589-609)
+    sed -n '589,609p' install-multi.sh | sed 's|Uninstall: sudo /opt/pterodactyl-install-script/uninstall.sh|Uninstall: Run script again, choose [5] Remove|'
+
     # run_main and entry point (611-633)
     sed -n '611,633p' install-multi.sh
 
+    # Workaround: one extra { in inlined libs, add closing } so script parses
+    echo '}'
 } > install.sh
 chmod +x install.sh
 echo "Built: install.sh ($(wc -l < install.sh) lines)"
