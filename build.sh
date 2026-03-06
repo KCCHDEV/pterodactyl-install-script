@@ -170,7 +170,7 @@ COPY_OPT
     # run_main and entry point (611-635)
     sed -n '611,635p' install-multi.sh
 
-    # Workaround: one extra { in inlined libs, add closing } so script parses
+    # Fix: inlined libs have 1 extra { (unclosed block), add } so bash parses correctly
     echo '}'
 } > install.sh
 chmod +x install.sh
