@@ -175,7 +175,7 @@ NGINXCFPROXY
 create_nginx_localhost() {
     # For Cloudflare Tunnel - only listen on localhost
     local domain="${1:-localhost}"
-    log_info "Creating Nginx localhost-only config (for CF Tunnel)..."
+    log_info "Creating Nginx localhost-only config (for CF Tunnel)..." >&2
 
     cat > "$NGINX_AVAILABLE" << NGINXLOCAL
 server {
@@ -212,5 +212,5 @@ NGINXLOCAL
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
     nginx -t
     systemctl reload nginx
-    log_success "Nginx localhost config created (CF Tunnel mode)"
+    log_success "Nginx localhost config created (CF Tunnel mode)" >&2
 }

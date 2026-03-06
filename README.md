@@ -41,7 +41,7 @@ cd pterodactyl-install-script
 sudo ./install.sh
 ```
 
-> **หมายเหตุ:** Raw URL แบบสั้น: `https://raw.githubusercontent.com/KCCHDEV/pterodactyl-install-script/main/install.sh` ใช้ได้เหมือนกัน
+> **หมายเหตุ:** ใช้ `refs/heads/main` เพื่อ bypass CDN cache — push ใหม่แล้วใช้ได้ทันที
 
 ---
 

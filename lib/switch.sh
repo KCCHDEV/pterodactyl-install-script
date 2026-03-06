@@ -101,7 +101,7 @@ switch_to_cftunnel() {
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
 
-    log_info "Switching to Cloudflare Tunnel mode..."
+    log_info "Switching to Cloudflare Tunnel mode..." >&2
     create_nginx_localhost "$FQDN"
 
     if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then

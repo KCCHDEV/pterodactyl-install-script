@@ -468,7 +468,7 @@ NGINXCFPROXY
 create_nginx_localhost() {
     # For Cloudflare Tunnel - only listen on localhost
     local domain="${1:-localhost}"
-    log_info "Creating Nginx localhost-only config (for CF Tunnel)..."
+    log_info "Creating Nginx localhost-only config (for CF Tunnel)..." >&2
 
     cat > "$NGINX_AVAILABLE" << NGINXLOCAL
 server {
@@ -505,7 +505,7 @@ NGINXLOCAL
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
     nginx -t
     systemctl reload nginx
-    log_success "Nginx localhost config created (CF Tunnel mode)"
+    log_success "Nginx localhost config created (CF Tunnel mode)" >&2
 }
 # Pterodactyl Panel Installer - Follows official doc 100%
 # https://pterodactyl.io/panel/1.0/getting_started.html
@@ -995,7 +995,7 @@ switch_to_cftunnel() {
     load_switch_context
     CF_TUNNEL_TYPE="$cf_type"
 
-    log_info "Switching to Cloudflare Tunnel mode..."
+    log_info "Switching to Cloudflare Tunnel mode..." >&2
     create_nginx_localhost "$FQDN"
 
     if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
@@ -1325,16 +1325,16 @@ run_switch_mode() {
             else
                 log_info "Selected: Quick Tunnel (trycloudflare.com)"
             fi
-            switch_to_cftunnel "$tunnel_choice"
+            switch_to_cftunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
             ;;
         4) switch_to_cloudflare_proxy ;;
         5) return 0 ;;
         *) log_error "Invalid choice"; return 1 ;;
     esac
 
-    echo ""
-    echo "Switch complete. Restart Wings if needed: systemctl restart wings"
-    echo ""
+    echo "" >&2
+    echo "Switch complete. Restart Wings if needed: systemctl restart wings" >&2
+    echo "" >&2
 }
 
 run_install_wings_only() {

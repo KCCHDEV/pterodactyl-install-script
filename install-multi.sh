@@ -342,16 +342,16 @@ run_switch_mode() {
             else
                 log_info "Selected: Quick Tunnel (trycloudflare.com)"
             fi
-            switch_to_cftunnel "$tunnel_choice"
+            switch_to_cftunnel "$tunnel_choice" || { log_error "Switch failed." >&2; return 1; }
             ;;
         4) switch_to_cloudflare_proxy ;;
         5) return 0 ;;
         *) log_error "Invalid choice"; return 1 ;;
     esac
 
-    echo ""
-    echo "Switch complete. Restart Wings if needed: systemctl restart wings"
-    echo ""
+    echo "" >&2
+    echo "Switch complete. Restart Wings if needed: systemctl restart wings" >&2
+    echo "" >&2
 }
 
 run_install_wings_only() {
