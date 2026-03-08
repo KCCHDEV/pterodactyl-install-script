@@ -200,7 +200,7 @@ setup_named_tunnel() {
     if [[ ! -f "$credentials_path" ]]; then
         credentials_path="/etc/cloudflared/${tunnel_name}.json"
         log_info "Named tunnel - run these steps:"
-        log_info "  1. cloudflared tunnel login     (opens browser)"
+        log_info "  1. cloudflared tunnel login     (opens browser, creates cert.pem for tunnel list/create)"
         log_info "  2. cloudflared tunnel create $tunnel_name"
         log_info "  3. cloudflared tunnel route dns $tunnel_name $domain"
         log_info "  4. cp /root/.cloudflared/*.json $credentials_path"
@@ -244,7 +244,7 @@ EOF
         log_info "Panel URL (after completing steps): https://${domain}"
         echo "" >&2
         log_info "Required steps (run in order):" >&2
-        log_info "  1. cloudflared tunnel login     (opens browser)" >&2
+        log_info "  1. cloudflared tunnel login     (opens browser, creates cert.pem for tunnel list/create)" >&2
         log_info "  2. cloudflared tunnel create $tunnel_name" >&2
         log_info "  3. cloudflared tunnel route dns $tunnel_name $domain" >&2
         log_info "  4. cp /root/.cloudflared/*.json $credentials_path" >&2

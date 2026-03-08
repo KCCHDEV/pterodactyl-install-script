@@ -150,6 +150,114 @@ switch_to_npm_tunnel() {
     sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
 }
 
+show_wings_next_steps() {
+    local mode="${1:-1}"
+    local fqdn="${2:-localhost}"
+    local panel_url="${3:-}"
+
+    echo "" >&2
+    echo "==============================================" >&2
+    echo "  Next Steps for Wings (Mode $mode)" >&2
+    echo "==============================================" >&2
+    echo "" >&2
+    case "$mode" in
+        1)
+            log_info "Mode 1: Tunnel (Cloudflare)" >&2
+            echo "  - Panel + Wings API: no ports (Tunnel handles Panel)" >&2
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: $panel_url" >&2
+            ;;
+        2)
+            log_info "Mode 2: Nginx Proxy Manager" >&2
+            echo "  - Add Proxy Host in NPM: $fqdn -> 127.0.0.1:8080" >&2
+            echo "  - Wings API connects to panel at 127.0.0.1:8080" >&2
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: https://${fqdn}" >&2
+            ;;
+        3)
+            log_info "Mode 3: NPM + Tunnel" >&2
+            echo "  - Add Proxy Host in NPM: $fqdn -> 127.0.0.1:8080" >&2
+            echo "  - Optional: Cloudflare Tunnel for external access" >&2
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: https://${fqdn} or trycloudflare URL" >&2
+            ;;
+        *)
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: $panel_url" >&2
+            ;;
+    esac
+    echo "" >&2
+    echo "  Required ports (open in firewall):" >&2
+    echo "    - 2022/tcp  SFTP (file uploads) - cannot use Cloudflare proxy" >&2
+    echo "    - Game ports from Panel Allocations (e.g. 25565, 27015)" >&2
+    echo "  Example: ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload" >&2
+    echo "  Node settings in Panel: FQDN=$fqdn, Behind Proxy=Yes, Use SSL=Yes" >&2
+    echo "  Wings connects to Panel at http://127.0.0.1 (local - no TLS verify needed)" >&2
+    echo "" >&2
+}
+
+run_configure_wings() {
+    if ! is_panel_installed; then
+        log_error "Panel not installed. Run Fresh Install first."
+        exit 1
+    fi
+    load_switch_context
+    [[ -z "$FQDN" ]] && FQDN="localhost"
+    local mode
+    mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
+    local panel_url
+    panel_url=$(get_json_value "$SETTINGS_JSON_PATH" "panel_url")
+    panel_url="${panel_url:-https://${FQDN}}"
+
+    echo "" >&2
+    echo "==============================================" >&2
+    echo "  Configure Wings from Panel" >&2
+    echo "==============================================" >&2
+    echo "" >&2
+    echo "1. Login to Panel: $panel_url" >&2
+    echo "2. Nodes -> Create Node (or select existing)" >&2
+    echo "3. Configuration tab -> Copy the deployment command" >&2
+    echo "" >&2
+    local input
+    input=$(tui_input "Configure Wings" "Paste deployment URL or full command:\n\nPanel: $panel_url\n\nURL or command:" "") 2>/dev/null || true
+    if [[ -z "$input" ]]; then
+        log_info "Paste the deployment URL (e.g. https://panel.example.com/api/application/nodes/1/configuration)" >&2
+        log_info "Or paste the full command (we will extract the URL)" >&2
+        echo "" >&2
+        prompt_read "Deployment URL or command: "
+        input="${REPLY:-}"
+    fi
+    input=$(echo "$input" | xargs)
+    [[ -z "$input" ]] && { log_error "Empty input. Aborted." >&2; return 1; }
+
+    local url="$input"
+    if [[ "$input" == curl* ]]; then
+        url=$(echo "$input" | grep -oE 'https?://[^|[:space:]]+' | head -1)
+    fi
+    [[ -z "$url" ]] && { log_error "Could not extract URL. Paste the deployment URL." >&2; return 1; }
+
+    log_info "Fetching and applying Wings config from Panel..." >&2
+    if curl -sSL "$url" | sudo -E bash; then
+        log_success "Deployment script executed" >&2
+    else
+        log_error "Deployment failed. Check the URL and Panel accessibility." >&2
+        return 1
+    fi
+
+    [[ ! -f "$WINGS_CONFIG" ]] && { log_error "Wings config not found at $WINGS_CONFIG" >&2; return 1; }
+
+    local backend_port="80"
+    [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080"
+    log_info "Adjusting Wings API for Mode $mode (127.0.0.1:$backend_port)..." >&2
+    sed -i 's/host:[[:space:]]*[^[:space:]]*/host: 127.0.0.1/' "$WINGS_CONFIG" 2>/dev/null || true
+    update_wings_api_port "$backend_port"
+    sed -i "s|remote: .*|remote: http://127.0.0.1:$backend_port|" "$WINGS_CONFIG" 2>/dev/null || true
+    sed -i 's/"wings_installed":[[:space:]]*false/"wings_installed": true/' "$SETTINGS_JSON_PATH" 2>/dev/null || true
+    log_success "Wings config applied" >&2
+
+    show_wings_next_steps "$mode" "$FQDN" "$panel_url"
+}
+
 update_settings_mode() {
     local mode="$1"
     local panel_url="$2"

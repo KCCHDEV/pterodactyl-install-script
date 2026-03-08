@@ -227,6 +227,19 @@ prompt_read() {
 }
 
 main_menu() {
+    local choice
+    if choice=$(tui_menu "Pterodactyl Panel" "Select an option:" 18 70 \
+        "1" "Fresh Install - Full panel installation" \
+        "2" "Switch Mode - Change HTTP / HTTPS / CF Tunnel" \
+        "3" "Install Wings - Add Wings daemon (game servers)" \
+        "4" "Fix Panel - Fix 500 error, permissions, cache" \
+        "5" "Remove - Uninstall panel, wings, database" \
+        "6" "Remove and Install - Uninstall then fresh install" \
+        "7" "Configure Wings - Apply deployment config from Panel" \
+        "8" "Exit") && [[ -n "$choice" ]]; then
+        echo "$choice"
+        return 0
+    fi
     {
         echo ""
         echo "=============================================="
@@ -239,10 +252,11 @@ main_menu() {
         echo "  [4] Fix Panel          - Fix 500 error, permissions, cache"
         echo "  [5] Remove             - Uninstall panel, wings, database"
         echo "  [6] Remove and Install - Uninstall then fresh install"
-        echo "  [7] Exit"
+        echo "  [7] Configure Wings     - Apply deployment config from Panel"
+        echo "  [8] Exit"
         echo ""
     } >&2
-    prompt_read "Enter 1-7: "
+    prompt_read "Enter 1-8: "
     echo "${REPLY:-1}"
 }
 
@@ -305,31 +319,47 @@ run_switch_mode() {
         *) mode_name="Unknown" ;;
     esac
 
-    echo ""
-    echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
-    echo ""
-    echo "  Switch to:"
-    echo "  [1] Tunnel - Panel + Wings on Cloudflare Tunnel"
-    echo "  [2] NPM - Panel + Wings on Nginx Proxy Manager"
-    echo "  [3] NPM + Tunnel - Both NPM domain and trycloudflare.com"
-    echo "  [4] Back to main menu"
-    echo ""
-    prompt_read "Enter 1-4: "
-    local choice="${REPLY:-4}"
+    local choice
+    if choice=$(tui_menu "Switch Mode" "Current: $mode_name | FQDN: ${fqdn:-localhost}\n\nSelect mode:" 14 65 \
+        "1" "Tunnel - Panel + Wings on Cloudflare Tunnel" \
+        "2" "NPM - Panel + Wings on Nginx Proxy Manager" \
+        "3" "NPM + Tunnel - Both NPM domain and trycloudflare.com" \
+        "4" "Back to main menu") && [[ -n "$choice" ]]; then
+        :
+    else
+        {
+            echo ""
+            echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
+            echo ""
+            echo "  Switch to:"
+            echo "  [1] Tunnel - Panel + Wings on Cloudflare Tunnel"
+            echo "  [2] NPM - Panel + Wings on Nginx Proxy Manager"
+            echo "  [3] NPM + Tunnel - Both NPM domain and trycloudflare.com"
+            echo "  [4] Back to main menu"
+            echo ""
+        } >&2
+        prompt_read "Enter 1-4: "
+        choice="${REPLY:-4}"
+    fi
 
+    local tunnel_choice domain_override
     case "$choice" in
         1)
-            echo "  [a] Quick Tunnel (trycloudflare.com)"
-            echo "  [b] Named Tunnel (your domain)"
-            prompt_read "Enter a or b: "
-            local tunnel_choice domain_override
-            tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            if tunnel_choice=$(tui_menu "Tunnel Type" "Select tunnel type:" 10 55 \
+                "a" "Quick Tunnel (trycloudflare.com)" \
+                "b" "Named Tunnel (your domain)") && [[ -n "$tunnel_choice" ]]; then
+                :
+            else
+                { echo "  [a] Quick Tunnel (trycloudflare.com)"; echo "  [b] Named Tunnel (your domain)"; } >&2
+                prompt_read "Enter a or b: "
+                tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            fi
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
-                log_info "Selected: Named Tunnel (your domain)"
+                log_info "Selected: Named Tunnel (your domain)" >&2
                 if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
-                    prompt_read "Enter your domain (e.g. panel.example.com): "
-                    domain_override="${REPLY:-}"
+                    domain_override=$(tui_input "Named Tunnel" "Enter your domain (e.g. panel.example.com):" "") || true
+                    [[ -z "$domain_override" ]] && { prompt_read "Enter your domain (e.g. panel.example.com): "; domain_override="${REPLY:-}"; }
                     [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
                 fi
             fi
@@ -337,17 +367,21 @@ run_switch_mode() {
             ;;
         2) switch_to_npm || { log_error "Switch failed." >&2; return 1; } ;;
         3)
-            echo "  [a] Quick Tunnel (trycloudflare.com)"
-            echo "  [b] Named Tunnel (your domain)"
-            prompt_read "Enter a or b: "
-            local tunnel_choice domain_override
-            tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            if tunnel_choice=$(tui_menu "Tunnel Type" "Select tunnel type:" 10 55 \
+                "a" "Quick Tunnel (trycloudflare.com)" \
+                "b" "Named Tunnel (your domain)") && [[ -n "$tunnel_choice" ]]; then
+                :
+            else
+                { echo "  [a] Quick Tunnel (trycloudflare.com)"; echo "  [b] Named Tunnel (your domain)"; } >&2
+                prompt_read "Enter a or b: "
+                tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            fi
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
-                log_info "Selected: Named Tunnel (your domain)"
+                log_info "Selected: Named Tunnel (your domain)" >&2
                 if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
-                    prompt_read "Enter your domain (e.g. panel.example.com): "
-                    domain_override="${REPLY:-}"
+                    domain_override=$(tui_input "Named Tunnel" "Enter your domain (e.g. panel.example.com):" "") || true
+                    [[ -z "$domain_override" ]] && { prompt_read "Enter your domain (e.g. panel.example.com): "; domain_override="${REPLY:-}"; }
                     [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
                 fi
             fi
@@ -464,10 +498,17 @@ Node Setup (required for game servers):
   2. Go to Nodes -> Locations -> Create (e.g. "Default")
   3. Go to Nodes -> Create Node
      - Name: Main
-     - FQDN: $FQDN (or your server IP)
+     - FQDN: $FQDN (or your panel domain)
+     - Behind Proxy: Yes, Use SSL: Yes
      - Memory/Disk: Set as needed
   4. After creating node, go to Configuration tab
   5. Run the deployment command shown there on this server
+     (or use menu [7] Configure Wings in the script and paste the deployment URL)
+
+Required ports (open in firewall - cannot use Cloudflare proxy):
+  - 2022/tcp   SFTP (file uploads to game servers)
+  - Game ports from Allocations (e.g. 25565 Minecraft, 27015 Source)
+  Example: ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload
 
 ========================================
 CREDS
@@ -612,6 +653,7 @@ run_install() {
     if [[ "$wings_installed" == "true" ]]; then
         echo "  3. Run the node deployment command from panel Configuration"
         echo "  4. Start Wings: systemctl start wings"
+        echo "  5. Open firewall: ufw allow 2022/tcp (SFTP) and game ports from Allocations"
     else
         echo "  3. To install Wings later, run the installer again or use install-wings.sh"
     fi
@@ -620,6 +662,7 @@ run_install() {
 
 run_main() {
     check_root
+    ensure_tui 2>/dev/null || true
     local choice
     while true; do
         choice=$(main_menu)
@@ -630,7 +673,8 @@ run_main() {
             4) run_fix_panel ;;
             5) run_remove; break ;;
             6) run_remove_and_install; break ;;
-            7) log_info "Exit"; exit 0 ;;
+            7) run_configure_wings ;;
+            8) log_info "Exit"; exit 0 ;;
             *) run_install; break ;;  # Default to fresh install for non-interactive
         esac
     done

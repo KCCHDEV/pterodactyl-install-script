@@ -72,7 +72,7 @@ check_os() {
                 fi
                 ;;
             debian)
-                if [[ "$VERSION_ID" == "11" ]] || [[ "$VERSION_ID" == "12" ]]; then
+                if [[ "$VERSION_ID" == "11" ]] || [[ "$VERSION_ID" == "12" ]] || [[ "$VERSION_ID" == "13" ]]; then
                     log_success "Detected $PRETTY_NAME - Supported"
                     return 0
                 fi
@@ -81,7 +81,7 @@ check_os() {
         log_warn "OS: $PRETTY_NAME - May work but not officially tested"
         return 0
     fi
-    log_error "Cannot detect OS. Supported: Ubuntu 22.04/24.04, Debian 11/12"
+    log_error "Cannot detect OS. Supported: Ubuntu 22.04/24.04, Debian 11/12/13"
     exit 1
 }
 
@@ -119,6 +119,73 @@ is_installed() {
     command -v "$1" &>/dev/null
 }
 
+USE_TUI=0
+TUI_CMD=""
+if [[ -t 0 ]] && [[ -e /dev/tty ]]; then
+    if command -v dialog &>/dev/null; then
+        TUI_CMD="dialog"
+        USE_TUI=1
+    elif command -v whiptail &>/dev/null; then
+        TUI_CMD="whiptail"
+        USE_TUI=1
+    fi
+fi
+
+ensure_tui() {
+    if [[ $USE_TUI -eq 1 ]]; then return 0; fi
+    [[ ! -t 0 ]] && return 1
+    if apt-get install -y dialog &>/dev/null 2>&1; then
+        TUI_CMD="dialog"
+        USE_TUI=1
+        return 0
+    fi
+    if apt-get install -y whiptail &>/dev/null 2>&1; then
+        TUI_CMD="whiptail"
+        USE_TUI=1
+        return 0
+    fi
+    return 1
+}
+
+tui_menu() {
+    local title="$1" msg="$2" h="${3:-15}" w="${4:-60}"
+    shift 4
+    local tags=() items=()
+    while [[ $# -ge 2 ]]; do
+        tags+=("$1")
+        items+=("$2")
+        shift 2
+    done
+    local mh=$((${#tags[@]}))
+    [[ $mh -lt 5 ]] && mh=5
+    if [[ $USE_TUI -eq 1 && -n "$TUI_CMD" ]]; then
+        local args=()
+        for i in "${!tags[@]}"; do
+            args+=("${tags[$i]}" "${items[$i]}")
+        done
+        if [[ "$TUI_CMD" == "dialog" ]]; then
+            $TUI_CMD --stdout --no-shadow --title "$title" --menu "$msg" "$h" "$w" "$mh" "${args[@]}" 2>/dev/tty
+        else
+            $TUI_CMD --title "$title" --menu "$msg" "$h" "$w" "$mh" "${args[@]}" 3>&1 1>&2 2>&3
+        fi
+    else
+        return 1
+    fi
+}
+
+tui_input() {
+    local title="$1" msg="$2" default="${3:-}"
+    if [[ $USE_TUI -eq 1 && -n "$TUI_CMD" ]]; then
+        if [[ "$TUI_CMD" == "dialog" ]]; then
+            $TUI_CMD --stdout --no-shadow --title "$title" --inputbox "$msg" 10 60 "$default" 2>/dev/tty
+        else
+            $TUI_CMD --title "$title" --inputbox "$msg" 10 60 "$default" 3>&1 1>&2 2>&3
+        fi
+    else
+        return 1
+    fi
+}
+
 ensure_directory() {
     local dir="$1"
     local perm="${2:-755}"
@@ -146,7 +213,7 @@ load_install_config() {
 install_base_packages() {
     log_info "Updating system packages..."
     apt-get update -qq
-    apt-get install -y -qq software-properties-common curl wget git unzip apt-transport-https ca-certificates gnupg lsb-release
+    apt-get install -y -qq software-properties-common curl wget git unzip apt-transport-https ca-certificates gnupg lsb-release dialog
 
     log_info "Installing base dependencies..."
     apt-get install -y -qq build-essential
@@ -743,7 +810,7 @@ user:
   username: pterodactyl
   groupname: pterodactyl
 allowed_mounts: []
-remote: $panel_url
+remote: http://127.0.0.1:$api_port
 WINGSCFG
 
     if ! id pterodactyl &>/dev/null; then
@@ -778,6 +845,7 @@ update_wings_token() {
     local token_id="${1}"
     local token_value="${2}"
     local panel_url="${3}"
+    local backend_port="${4:-}"
 
     if [[ ! -f "$WINGS_CONFIG" ]]; then
         log_error "Wings config not found"
@@ -786,7 +854,9 @@ update_wings_token() {
 
     sed -i "s/token_id: \"[^\"]*\"/token_id: \"$token_id\"/" "$WINGS_CONFIG"
     sed -i "s/token: \"[^\"]*\"/token: \"$token_value\"/" "$WINGS_CONFIG"
-    sed -i "s|remote: .*|remote: $panel_url|" "$WINGS_CONFIG"
+    local remote_url="$panel_url"
+    [[ -n "$backend_port" ]] && remote_url="http://127.0.0.1:$backend_port"
+    sed -i "s|remote: .*|remote: $remote_url|" "$WINGS_CONFIG"
 
     systemctl restart wings 2>/dev/null || true
     log_success "Wings token updated"
@@ -989,7 +1059,7 @@ setup_named_tunnel() {
     if [[ ! -f "$credentials_path" ]]; then
         credentials_path="/etc/cloudflared/${tunnel_name}.json"
         log_info "Named tunnel - run these steps:"
-        log_info "  1. cloudflared tunnel login     (opens browser)"
+        log_info "  1. cloudflared tunnel login     (opens browser, creates cert.pem for tunnel list/create)"
         log_info "  2. cloudflared tunnel create $tunnel_name"
         log_info "  3. cloudflared tunnel route dns $tunnel_name $domain"
         log_info "  4. cp /root/.cloudflared/*.json $credentials_path"
@@ -1033,7 +1103,7 @@ EOF
         log_info "Panel URL (after completing steps): https://${domain}"
         echo "" >&2
         log_info "Required steps (run in order):" >&2
-        log_info "  1. cloudflared tunnel login     (opens browser)" >&2
+        log_info "  1. cloudflared tunnel login     (opens browser, creates cert.pem for tunnel list/create)" >&2
         log_info "  2. cloudflared tunnel create $tunnel_name" >&2
         log_info "  3. cloudflared tunnel route dns $tunnel_name $domain" >&2
         log_info "  4. cp /root/.cloudflared/*.json $credentials_path" >&2
@@ -1480,6 +1550,19 @@ prompt_read() {
 }
 
 main_menu() {
+    local choice
+    if choice=$(tui_menu "Pterodactyl Panel" "Select an option:" 18 70 \
+        "1" "Fresh Install - Full panel installation" \
+        "2" "Switch Mode - Change HTTP / HTTPS / CF Tunnel" \
+        "3" "Install Wings - Add Wings daemon (game servers)" \
+        "4" "Fix Panel - Fix 500 error, permissions, cache" \
+        "5" "Remove - Uninstall panel, wings, database" \
+        "6" "Remove and Install - Uninstall then fresh install" \
+        "7" "Configure Wings - Apply deployment config from Panel" \
+        "8" "Exit") && [[ -n "$choice" ]]; then
+        echo "$choice"
+        return 0
+    fi
     {
         echo ""
         echo "=============================================="
@@ -1492,10 +1575,11 @@ main_menu() {
         echo "  [4] Fix Panel          - Fix 500 error, permissions, cache"
         echo "  [5] Remove             - Uninstall panel, wings, database"
         echo "  [6] Remove and Install - Uninstall then fresh install"
-        echo "  [7] Exit"
+        echo "  [7] Configure Wings     - Apply deployment config from Panel"
+        echo "  [8] Exit"
         echo ""
     } >&2
-    prompt_read "Enter 1-7: "
+    prompt_read "Enter 1-8: "
     echo "${REPLY:-1}"
 }
 
@@ -1537,31 +1621,47 @@ run_switch_mode() {
         *) mode_name="Unknown" ;;
     esac
 
-    echo ""
-    echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
-    echo ""
-    echo "  Switch to:"
-    echo "  [1] Tunnel - Panel + Wings on Cloudflare Tunnel"
-    echo "  [2] NPM - Panel + Wings on Nginx Proxy Manager"
-    echo "  [3] NPM + Tunnel - Both NPM domain and trycloudflare.com"
-    echo "  [4] Back to main menu"
-    echo ""
-    prompt_read "Enter 1-4: "
-    local choice="${REPLY:-4}"
+    local choice
+    if choice=$(tui_menu "Switch Mode" "Current: $mode_name | FQDN: ${fqdn:-localhost}\n\nSelect mode:" 14 65 \
+        "1" "Tunnel - Panel + Wings on Cloudflare Tunnel" \
+        "2" "NPM - Panel + Wings on Nginx Proxy Manager" \
+        "3" "NPM + Tunnel - Both NPM domain and trycloudflare.com" \
+        "4" "Back to main menu") && [[ -n "$choice" ]]; then
+        :
+    else
+        {
+            echo ""
+            echo "Current mode: $mode_name | FQDN: ${fqdn:-localhost}"
+            echo ""
+            echo "  Switch to:"
+            echo "  [1] Tunnel - Panel + Wings on Cloudflare Tunnel"
+            echo "  [2] NPM - Panel + Wings on Nginx Proxy Manager"
+            echo "  [3] NPM + Tunnel - Both NPM domain and trycloudflare.com"
+            echo "  [4] Back to main menu"
+            echo ""
+        } >&2
+        prompt_read "Enter 1-4: "
+        choice="${REPLY:-4}"
+    fi
 
+    local tunnel_choice domain_override
     case "$choice" in
         1)
-            echo "  [a] Quick Tunnel (trycloudflare.com)"
-            echo "  [b] Named Tunnel (your domain)"
-            prompt_read "Enter a or b: "
-            local tunnel_choice domain_override
-            tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            if tunnel_choice=$(tui_menu "Tunnel Type" "Select tunnel type:" 10 55 \
+                "a" "Quick Tunnel (trycloudflare.com)" \
+                "b" "Named Tunnel (your domain)") && [[ -n "$tunnel_choice" ]]; then
+                :
+            else
+                { echo "  [a] Quick Tunnel (trycloudflare.com)"; echo "  [b] Named Tunnel (your domain)"; } >&2
+                prompt_read "Enter a or b: "
+                tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            fi
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
-                log_info "Selected: Named Tunnel (your domain)"
+                log_info "Selected: Named Tunnel (your domain)" >&2
                 if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
-                    prompt_read "Enter your domain (e.g. panel.example.com): "
-                    domain_override="${REPLY:-}"
+                    domain_override=$(tui_input "Named Tunnel" "Enter your domain (e.g. panel.example.com):" "") || true
+                    [[ -z "$domain_override" ]] && { prompt_read "Enter your domain (e.g. panel.example.com): "; domain_override="${REPLY:-}"; }
                     [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
                 fi
             fi
@@ -1569,17 +1669,21 @@ run_switch_mode() {
             ;;
         2) switch_to_npm || { log_error "Switch failed." >&2; return 1; } ;;
         3)
-            echo "  [a] Quick Tunnel (trycloudflare.com)"
-            echo "  [b] Named Tunnel (your domain)"
-            prompt_read "Enter a or b: "
-            local tunnel_choice domain_override
-            tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            if tunnel_choice=$(tui_menu "Tunnel Type" "Select tunnel type:" 10 55 \
+                "a" "Quick Tunnel (trycloudflare.com)" \
+                "b" "Named Tunnel (your domain)") && [[ -n "$tunnel_choice" ]]; then
+                :
+            else
+                { echo "  [a] Quick Tunnel (trycloudflare.com)"; echo "  [b] Named Tunnel (your domain)"; } >&2
+                prompt_read "Enter a or b: "
+                tunnel_choice=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+            fi
             [[ "$tunnel_choice" != "b" ]] && tunnel_choice="a"
             if [[ "$tunnel_choice" == "b" ]]; then
-                log_info "Selected: Named Tunnel (your domain)"
+                log_info "Selected: Named Tunnel (your domain)" >&2
                 if [[ "${fqdn:-localhost}" == "localhost" || "${fqdn:-}" == "127.0.0.1" || -z "${fqdn:-}" ]]; then
-                    prompt_read "Enter your domain (e.g. panel.example.com): "
-                    domain_override="${REPLY:-}"
+                    domain_override=$(tui_input "Named Tunnel" "Enter your domain (e.g. panel.example.com):" "") || true
+                    [[ -z "$domain_override" ]] && { prompt_read "Enter your domain (e.g. panel.example.com): "; domain_override="${REPLY:-}"; }
                     [[ -z "$domain_override" ]] && { log_error "Domain required for Named Tunnel." >&2; return 1; }
                 fi
             fi
@@ -1674,6 +1778,118 @@ run_fix_panel() {
     echo ""
 }
 
+show_wings_next_steps() {
+    local mode="${1:-1}"
+    local fqdn="${2:-localhost}"
+    local panel_url="${3:-}"
+
+    echo "" >&2
+    echo "==============================================" >&2
+    echo "  Next Steps for Wings (Mode $mode)" >&2
+    echo "==============================================" >&2
+    echo "" >&2
+    case "$mode" in
+        1)
+            log_info "Mode 1: Tunnel (Cloudflare)" >&2
+            echo "  - Panel + Wings API: no ports (Tunnel handles Panel)" >&2
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: $panel_url" >&2
+            ;;
+        2)
+            log_info "Mode 2: Nginx Proxy Manager" >&2
+            echo "  - Add Proxy Host in NPM: $fqdn -> 127.0.0.1:8080" >&2
+            echo "  - Wings API connects to panel at 127.0.0.1:8080" >&2
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: https://${fqdn}" >&2
+            ;;
+        3)
+            log_info "Mode 3: NPM + Tunnel" >&2
+            echo "  - Add Proxy Host in NPM: $fqdn -> 127.0.0.1:8080" >&2
+            echo "  - Optional: Cloudflare Tunnel for external access" >&2
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: https://${fqdn} or trycloudflare URL" >&2
+            ;;
+        *)
+            echo "  - Start Wings: systemctl start wings" >&2
+            echo "  - Access Panel: $panel_url" >&2
+            ;;
+    esac
+    echo "" >&2
+    echo "  Required ports (open in firewall):" >&2
+    echo "    - 2022/tcp  SFTP (file uploads) - cannot use Cloudflare proxy" >&2
+    echo "    - Game ports from Panel Allocations (e.g. 25565, 27015)" >&2
+    echo "  Example: ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload" >&2
+    echo "" >&2
+    echo "  Node settings in Panel: FQDN=$fqdn, Behind Proxy=Yes, Use SSL=Yes" >&2
+    echo "  Wings connects to Panel at http://127.0.0.1 (local - no TLS verify needed)" >&2
+    echo "" >&2
+}
+
+run_configure_wings() {
+    if ! is_panel_installed; then
+        log_error "Panel not installed. Run Fresh Install first."
+        exit 1
+    fi
+    load_switch_context
+    [[ -z "$FQDN" ]] && FQDN=$(get_json_value "$SETTINGS_JSON_PATH" "fqdn")
+    [[ -z "$FQDN" ]] && FQDN="localhost"
+    local mode
+    mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
+    local panel_url
+    panel_url=$(get_json_value "$SETTINGS_JSON_PATH" "panel_url")
+    panel_url="${panel_url:-https://${FQDN}}"
+
+    local input
+    input=$(tui_input "Configure Wings" "1. Login to Panel: $panel_url\n2. Nodes -> Create Node (or select existing)\n3. Configuration tab -> Copy the deployment command\n\nPaste the deployment URL or full command:" "") || true
+    if [[ -z "$input" ]]; then
+        {
+            echo ""
+            echo "=============================================="
+            echo "  Configure Wings from Panel"
+            echo "=============================================="
+            echo ""
+            echo "1. Login to Panel: $panel_url"
+            echo "2. Nodes -> Create Node (or select existing)"
+            echo "3. Configuration tab -> Copy the deployment command"
+            echo ""
+            log_info "Paste the deployment URL (e.g. https://panel.example.com/api/application/nodes/1/configuration)"
+            log_info "Or paste the full command (we will extract the URL)"
+            echo ""
+        } >&2
+        prompt_read "Deployment URL or command: "
+        input="${REPLY:-}"
+    fi
+    input=$(echo "$input" | xargs)
+    [[ -z "$input" ]] && { log_error "Empty input. Aborted."; return 1; }
+
+    local url="$input"
+    if [[ "$input" == curl* ]]; then
+        url=$(echo "$input" | grep -oE 'https?://[^|[:space:]]+' | head -1)
+    fi
+    [[ -z "$url" ]] && { log_error "Could not extract URL. Paste the deployment URL."; return 1; }
+
+    log_info "Fetching and applying Wings config from Panel..."
+    if curl -sSL "$url" | sudo -E bash; then
+        log_success "Deployment script executed"
+    else
+        log_error "Deployment failed. Check the URL and Panel accessibility."
+        return 1
+    fi
+
+    [[ ! -f "$WINGS_CONFIG" ]] && { log_error "Wings config not found at $WINGS_CONFIG"; return 1; }
+
+    local backend_port="80"
+    [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080"
+    log_info "Adjusting Wings API for Mode $mode (127.0.0.1:$backend_port)..."
+    sed -i 's/host:[[:space:]]*[^[:space:]]*/host: 127.0.0.1/' "$WINGS_CONFIG" 2>/dev/null || true
+    update_wings_api_port "$backend_port"
+    sed -i "s|remote: .*|remote: http://127.0.0.1:$backend_port|" "$WINGS_CONFIG" 2>/dev/null || true
+    sed -i 's/"wings_installed":[[:space:]]*false/"wings_installed": true/' "$SETTINGS_JSON_PATH" 2>/dev/null || true
+    log_success "Wings config applied"
+
+    show_wings_next_steps "$mode" "$FQDN" "$panel_url"
+}
+
 save_credentials() {
     local panel_url="${1}"
     cat > "$CREDENTIALS_FILE" << CREDS
@@ -1696,10 +1912,17 @@ Node Setup (required for game servers):
   2. Go to Nodes -> Locations -> Create (e.g. "Default")
   3. Go to Nodes -> Create Node
      - Name: Main
-     - FQDN: $FQDN (or your server IP)
+     - FQDN: $FQDN (or your panel domain)
+     - Behind Proxy: Yes, Use SSL: Yes
      - Memory/Disk: Set as needed
   4. After creating node, go to Configuration tab
   5. Run the deployment command shown there on this server
+     (or use menu [7] Configure Wings in the script and paste the deployment URL)
+
+Required ports (open in firewall - cannot use Cloudflare proxy):
+  - 2022/tcp   SFTP (file uploads to game servers)
+  - Game ports from Allocations (e.g. 25565 Minecraft, 27015 Source)
+  Example: ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload
 
 ========================================
 CREDS
@@ -1843,8 +2066,9 @@ run_install() {
     echo "  1. Login with admin / (your password)"
     echo "  2. Create Location and Node (see $CREDENTIALS_FILE)"
     if [[ "$wings_installed" == "true" ]]; then
-        echo "  3. Run the node deployment command from panel Configuration"
+        echo "  3. Run the node deployment command from panel Configuration (or use menu [7] Configure Wings)"
         echo "  4. Start Wings: systemctl start wings"
+        echo "  5. Open firewall: ufw allow 2022/tcp (SFTP) and game ports from Allocations"
     else
         echo "  3. To install Wings later, run the installer again or use install-wings.sh"
     fi
@@ -1852,6 +2076,7 @@ run_install() {
 }
 run_main() {
     check_root
+    ensure_tui 2>/dev/null || true
     local choice
     while true; do
         choice=$(main_menu)
@@ -1862,7 +2087,8 @@ run_main() {
             4) run_fix_panel ;;
             5) run_remove; break ;;
             6) run_remove_and_install; break ;;
-            7) log_info "Exit"; exit 0 ;;
+            7) run_configure_wings ;;
+            8) log_info "Exit"; exit 0 ;;
             *) run_install; break ;;  # Default to fresh install for non-interactive
         esac
     done

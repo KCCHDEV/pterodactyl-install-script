@@ -49,7 +49,7 @@ sudo ./install.sh
 
 | Item | Specification |
 |------|---------------|
-| **OS** | Ubuntu 22.04/24.04, Debian 11/12 |
+| **OS** | Ubuntu 22.04/24.04, Debian 11/12/13 |
 | **Privilege** | Root (sudo) |
 | **Disk** | ≥ 5GB |
 | **Network** | Port 80, 443 (หรือใช้ CF Tunnel ไม่ต้องเปิด port) |
@@ -60,10 +60,9 @@ sudo ./install.sh
 
 | Mode | Use Case | SSL |
 |------|----------|-----|
-| **1 - HTTP** | Development / ทดสอบ | ❌ |
-| **2 - HTTPS** | Production (Let's Encrypt) | ✅ Auto |
-| **3 - CF Tunnel** | Quick (`xxx.trycloudflare.com`) หรือ Named (domain ของคุณ) | ✅ |
-| **4 - CF Proxy** | Orange cloud + Origin SSL (cert path แบบกำหนดเองได้) | ✅ Custom |
+| **1 - Tunnel** | Cloudflare Tunnel — Quick (`xxx.trycloudflare.com`) หรือ Named (domain ของคุณ) | ✅ |
+| **2 - NPM** | Nginx Proxy Manager — Add Proxy Host ใน NPM | ✅ |
+| **3 - NPM + Tunnel** | NPM domain + Cloudflare Tunnel (Quick หรือ Named) | ✅ |
 
 ---
 
@@ -74,7 +73,7 @@ sudo ./install.sh
 - **FQDN** — domain เช่น `panel.example.com` หรือ `localhost`
 - **Admin Email** — สำหรับ admin + SSL
 - **Admin Password** — ขั้นต่ำ 8 ตัว
-- **Install Mode** — 1, 2, 3 หรือ 4
+- **Install Mode** — 1, 2, หรือ 3
 - **DB Password** — กด Enter เพื่อ auto-generate
 - **Install Wings?** — Y/n (ตัวเลือก game server daemon)
 
@@ -150,10 +149,13 @@ sudo ./cleaner.sh logs --keep-days 14
 
 1. เข้า Panel ด้วย admin / (รหัสที่ตั้ง)
 2. สร้าง **Location** (Nodes → Locations)
-3. สร้าง **Node** (Nodes → Create) — ตั้ง FQDN, Memory, Disk
+3. สร้าง **Node** (Nodes → Create) — ตั้ง FQDN, Behind Proxy=Yes, Use SSL=Yes, Memory, Disk
 4. Tab **Configuration** → copy คำสั่ง deployment
 5. รันบน server เพื่อตั้งค่า Wings
 6. `sudo systemctl start wings`
+7. **เปิด firewall**: พอร์ต 2022 (SFTP) และ game ports จาก Allocations
+   - `ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload`
+   - SFTP และ game ports ไม่สามารถใช้ Cloudflare proxy ได้ (ต้องเปิดตรงเซิร์ฟเวอร์)
 
 ---
 
@@ -161,9 +163,11 @@ sudo ./cleaner.sh logs --keep-days 14
 
 - **Wings Optional** — เลือก `n` ถ้าต้องการแค่ Panel (ไม่ติดตั้ง Docker)
 - **Wings** — ไม่ start อัตโนมัติจนกว่าจะสร้าง Node และรัน deployment
+- **SFTP/Game Ports** — ต้องเปิดพอร์ต 2022 และ game ports บน firewall (Cloudflare Tunnel ไม่ proxy ได้)
 - **CF Quick Tunnel** — URL เปลี่ยนทุกครั้งที่ restart
 - **HTTPS** — domain ต้องชี้มาที่ server ก่อนรัน Certbot
-- **CF Proxy (4)** — ใช้กับ Cloudflare orange cloud, ระบุ path cert/key ได้ (เช่น Cloudflare Origin SSL, Let's Encrypt)
+- **Cloudflare SSL Mode** — ใช้ **Full** หรือ **Full (Strict)** ขึ้นกับว่า Origin ใช้ Cloudflare Origin Certificate หรือ Let's Encrypt
+- **TLS Verify** — สำหรับ Panel+Wings บนเครื่องเดียวกัน สคริปต์ตั้งค่า Wings ให้เชื่อมต่อ Panel ที่ 127.0.0.1 (HTTP) จึงไม่ต้องกังวลเรื่องการตรวจสอบใบรับรอง
 - **Self-Signed SSL** — ถ้า cert ไม่มี สคริปต์จะถามสร้างให้อัตโนมัติ (ใช้ OpenSSL)
 
 ---

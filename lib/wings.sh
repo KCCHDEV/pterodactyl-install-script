@@ -66,7 +66,7 @@ user:
   username: pterodactyl
   groupname: pterodactyl
 allowed_mounts: []
-remote: $panel_url
+remote: http://127.0.0.1:$api_port
 WINGSCFG
 
     if ! id pterodactyl &>/dev/null; then
@@ -101,6 +101,7 @@ update_wings_token() {
     local token_id="${1}"
     local token_value="${2}"
     local panel_url="${3}"
+    local backend_port="${4:-}"
 
     if [[ ! -f "$WINGS_CONFIG" ]]; then
         log_error "Wings config not found"
@@ -109,7 +110,9 @@ update_wings_token() {
 
     sed -i "s/token_id: \"[^\"]*\"/token_id: \"$token_id\"/" "$WINGS_CONFIG"
     sed -i "s/token: \"[^\"]*\"/token: \"$token_value\"/" "$WINGS_CONFIG"
-    sed -i "s|remote: .*|remote: $panel_url|" "$WINGS_CONFIG"
+    local remote_url="$panel_url"
+    [[ -n "$backend_port" ]] && remote_url="http://127.0.0.1:$backend_port"
+    sed -i "s|remote: .*|remote: $remote_url|" "$WINGS_CONFIG"
 
     systemctl restart wings 2>/dev/null || true
     log_success "Wings token updated"

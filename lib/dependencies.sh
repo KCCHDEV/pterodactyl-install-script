@@ -11,7 +11,7 @@ source "$SCRIPT_DIR/common.sh"
 install_base_packages() {
     log_info "Updating system packages..."
     apt-get update -qq
-    apt-get install -y -qq software-properties-common curl wget git unzip apt-transport-https ca-certificates gnupg lsb-release
+    apt-get install -y -qq software-properties-common curl wget git unzip apt-transport-https ca-certificates gnupg lsb-release dialog
 
     log_info "Installing base dependencies..."
     apt-get install -y -qq build-essential
