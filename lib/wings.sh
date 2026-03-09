@@ -38,9 +38,20 @@ install_wings() {
         token_id=""
     fi
 
-    # API config - panel on same machine (internal HTTP)
-    # backend_port: 8080 for NPM mode, 80 for Tunnel mode
-    local api_port="${backend_port:-80}"
+    # remote: Tunnel mode (backend_port empty + panel_url https) -> use panel_url with --ignore-certificate-errors
+    #         NPM/local mode -> http://127.0.0.1:port
+    local remote_url
+    local use_ignore_cert=false
+    local api_port=8080
+    if [[ -z "$backend_port" && "$panel_url" == https://* ]]; then
+        remote_url="$panel_url"
+        use_ignore_cert=true
+        api_port=8080
+        log_info "Tunnel mode: Wings will connect to Panel via $remote_url (TLS verify disabled)"
+    else
+        api_port="${backend_port:-80}"
+        remote_url="http://127.0.0.1:$api_port"
+    fi
     local ssl_enabled="false"
 
     log_info "Creating Wings configuration..."
@@ -66,13 +77,16 @@ user:
   username: pterodactyl
   groupname: pterodactyl
 allowed_mounts: []
-remote: http://127.0.0.1:$api_port
+remote: $remote_url
 WINGSCFG
 
     if ! id pterodactyl &>/dev/null; then
         useradd -r -s /bin/false -d /var/lib/pterodactyl pterodactyl
     fi
     chown -R pterodactyl:pterodactyl /var/lib/pterodactyl
+
+    local exec_start="$WINGS_BINARY"
+    [[ "$use_ignore_cert" == true ]] && exec_start="$WINGS_BINARY --ignore-certificate-errors"
 
     cat > /etc/systemd/system/wings.service << WINGSSVC
 [Unit]
@@ -84,7 +98,7 @@ User=root
 WorkingDirectory=/etc/pterodactyl
 LimitNOFILE=4096
 PIDFile=/var/run/wings/daemon.pid
-ExecStart=$WINGS_BINARY
+ExecStart=$exec_start
 Restart=on-failure
 StartLimitInterval=180
 StartLimitBurst=30
@@ -116,4 +130,36 @@ update_wings_token() {
 
     systemctl restart wings 2>/dev/null || true
     log_success "Wings token updated"
+}
+
+# Update Wings remote URL and ExecStart flags (for tunnel vs local mode)
+# Usage: update_wings_remote panel_url backend_port
+# - backend_port empty + panel_url https -> remote=panel_url, --ignore-certificate-errors
+# - backend_port set -> remote=http://127.0.0.1:port, no flag
+update_wings_remote() {
+    local panel_url="${1}"
+    local backend_port="${2:-}"
+
+    [[ ! -f "$WINGS_CONFIG" ]] && return 0
+
+    local remote_url
+    local use_ignore_cert=false
+    if [[ -z "$backend_port" && "$panel_url" == https://* ]]; then
+        remote_url="$panel_url"
+        use_ignore_cert=true
+    else
+        local port="${backend_port:-80}"
+        remote_url="http://127.0.0.1:$port"
+        sed -i "s/port: [0-9]*/port: $port/" "$WINGS_CONFIG" 2>/dev/null || true
+    fi
+
+    sed -i "s|remote: .*|remote: $remote_url|" "$WINGS_CONFIG"
+
+    local exec_start="$WINGS_BINARY"
+    [[ "$use_ignore_cert" == true ]] && exec_start="$WINGS_BINARY --ignore-certificate-errors"
+
+    [[ -f /etc/systemd/system/wings.service ]] && sed -i "s|ExecStart=.*|ExecStart=$exec_start|" /etc/systemd/system/wings.service
+    systemctl daemon-reload
+    systemctl restart wings 2>/dev/null || true
+    log_success "Wings remote updated to $remote_url"
 }

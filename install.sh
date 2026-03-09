@@ -782,9 +782,21 @@ install_wings() {
         token_id=""
     fi
 
-    # API config - panel on same machine (internal HTTP)
-    # backend_port: 8080 for NPM mode, 80 for Tunnel mode
-    local api_port="${backend_port:-80}"
+    # remote: Tunnel mode (backend_port empty + panel_url https) -> use panel_url with --ignore-certificate-errors
+    #         NPM/local mode -> http://127.0.0.1:port
+    local remote_url
+    local use_ignore_cert=false
+    local api_port=8080
+    if [[ -z "$backend_port" && "$panel_url" == https://* ]]; then
+        remote_url="$panel_url"
+        use_ignore_cert=true
+        api_port=8080
+        log_info "Tunnel mode: Wings will connect to Panel via $remote_url (TLS verify disabled)"
+    else
+        api_port="${backend_port:-80}"
+        remote_url="http://127.0.0.1:$api_port"
+    fi
+
     local ssl_enabled="false"
 
     log_info "Creating Wings configuration..."
@@ -810,13 +822,16 @@ user:
   username: pterodactyl
   groupname: pterodactyl
 allowed_mounts: []
-remote: http://127.0.0.1:$api_port
+remote: $remote_url
 WINGSCFG
 
     if ! id pterodactyl &>/dev/null; then
         useradd -r -s /bin/false -d /var/lib/pterodactyl pterodactyl
     fi
     chown -R pterodactyl:pterodactyl /var/lib/pterodactyl
+
+    local exec_start="$WINGS_BINARY"
+    [[ "$use_ignore_cert" == true ]] && exec_start="$WINGS_BINARY --ignore-certificate-errors"
 
     cat > /etc/systemd/system/wings.service << WINGSSVC
 [Unit]
@@ -828,7 +843,7 @@ User=root
 WorkingDirectory=/etc/pterodactyl
 LimitNOFILE=4096
 PIDFile=/var/run/wings/daemon.pid
-ExecStart=$WINGS_BINARY
+ExecStart=$exec_start
 Restart=on-failure
 StartLimitInterval=180
 StartLimitBurst=30
@@ -860,6 +875,28 @@ update_wings_token() {
 
     systemctl restart wings 2>/dev/null || true
     log_success "Wings token updated"
+}
+
+update_wings_remote() {
+    local panel_url="${1}"
+    local backend_port="${2:-}"
+    [[ ! -f "$WINGS_CONFIG" ]] && return 0
+    local remote_url use_ignore_cert=false
+    if [[ -z "$backend_port" && "$panel_url" == https://* ]]; then
+        remote_url="$panel_url"
+        use_ignore_cert=true
+    else
+        local port="${backend_port:-80}"
+        remote_url="http://127.0.0.1:$port"
+        sed -i "s/port: [0-9]*/port: $port/" "$WINGS_CONFIG" 2>/dev/null || true
+    fi
+    sed -i "s|remote: .*|remote: $remote_url|" "$WINGS_CONFIG"
+    local exec_start="$WINGS_BINARY"
+    [[ "$use_ignore_cert" == true ]] && exec_start="$WINGS_BINARY --ignore-certificate-errors"
+    [[ -f /etc/systemd/system/wings.service ]] && sed -i "s|ExecStart=.*|ExecStart=$exec_start|" /etc/systemd/system/wings.service
+    systemctl daemon-reload
+    systemctl restart wings 2>/dev/null || true
+    log_success "Wings remote updated to $remote_url"
 }
 # Pterodactyl Panel Installer - Cloudflare Tunnel setup
 # Supports Quick Tunnel and Named Tunnel
@@ -1184,7 +1221,7 @@ switch_to_tunnel() {
         local new_url="https://${FQDN}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
-        update_wings_api_port "80"
+        update_wings_remote "$new_url" ""
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
             log_success "Named tunnel. Panel URL: $new_url"
@@ -1198,7 +1235,7 @@ switch_to_tunnel() {
         local new_url="${tunnel_url:-https://xxx.trycloudflare.com}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "a"
-        update_wings_api_port "80"
+        update_wings_remote "$new_url" ""
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         log_success "Quick Tunnel: $new_url"
     fi
@@ -1218,7 +1255,7 @@ switch_to_npm() {
     grep -q "^TRUSTED_PROXIES=" "$PANEL_PATH/.env" 2>/dev/null || echo "TRUSTED_PROXIES=127.0.0.1" >> "$PANEL_PATH/.env"
     sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
     update_settings_mode "2" "$new_url" ""
-    update_wings_api_port "8080"
+    update_wings_remote "$new_url" "8080"
     sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
     log_success "NPM mode. Add Proxy Host: $FQDN -> 127.0.0.1:8080"
 }
@@ -1244,7 +1281,7 @@ switch_to_npm_tunnel() {
         local new_url="https://${FQDN} (NPM + CF tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "3" "$new_url" "b" "" "" "$FQDN"
-        update_wings_api_port "8080"
+        update_wings_remote "https://${FQDN}" "8080"
         if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
             log_success "Named tunnel + NPM. Panel URL: $new_url"
         else
@@ -1258,7 +1295,7 @@ switch_to_npm_tunnel() {
         [[ -z "$tunnel_url" ]] && new_url="https://${FQDN} (NPM) + (journalctl -u cloudflared-tunnel -f for Tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "3" "$new_url" "a"
-        update_wings_api_port "8080"
+        update_wings_remote "https://${FQDN}" "8080"
         log_success "NPM + Quick Tunnel: $new_url"
     fi
     sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
@@ -1711,7 +1748,13 @@ run_install_wings_only() {
     # Use correct API port and URL by install_mode
     local mode fqdn
     mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
-    [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080" || backend_port="80"
+    # Mode 1 (Tunnel): empty backend_port = use tunnel URL + --ignore-certificate-errors
+    # Mode 2, 3: use 127.0.0.1:8080
+    if [[ "$mode" == "2" || "$mode" == "3" ]]; then
+        backend_port="8080"
+    else
+        backend_port=""
+    fi
     # Mode 3: use clean FQDN as panel URL (not the combined NPM+Tunnel string)
     if [[ "$mode" == "3" ]]; then
         fqdn=$(get_json_value "$SETTINGS_JSON_PATH" "fqdn")
@@ -1821,7 +1864,11 @@ show_wings_next_steps() {
     echo "  Example: ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload" >&2
     echo "" >&2
     echo "  Node settings in Panel: FQDN=$fqdn, Behind Proxy=Yes, Use SSL=Yes" >&2
-    echo "  Wings connects to Panel at http://127.0.0.1 (local - no TLS verify needed)" >&2
+    if [[ "$mode" == "1" ]]; then
+        echo "  Wings connects to Panel via Tunnel URL (HTTPS, TLS verify disabled)" >&2
+    else
+        echo "  Wings connects to Panel at http://127.0.0.1 (local - no TLS verify needed)" >&2
+    fi
     echo "" >&2
 }
 
@@ -1878,12 +1925,15 @@ run_configure_wings() {
 
     [[ ! -f "$WINGS_CONFIG" ]] && { log_error "Wings config not found at $WINGS_CONFIG"; return 1; }
 
-    local backend_port="80"
+    local backend_port=""
     [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080"
-    log_info "Adjusting Wings API for Mode $mode (127.0.0.1:$backend_port)..."
+    if [[ -n "$backend_port" ]]; then
+        log_info "Adjusting Wings for Mode $mode (127.0.0.1:$backend_port)..."
+    else
+        log_info "Adjusting Wings for Mode $mode (Tunnel URL + TLS verify disabled)..."
+    fi
     sed -i 's/host:[[:space:]]*[^[:space:]]*/host: 127.0.0.1/' "$WINGS_CONFIG" 2>/dev/null || true
-    update_wings_api_port "$backend_port"
-    sed -i "s|remote: .*|remote: http://127.0.0.1:$backend_port|" "$WINGS_CONFIG" 2>/dev/null || true
+    update_wings_remote "$panel_url" "$backend_port"
     sed -i 's/"wings_installed":[[:space:]]*false/"wings_installed": true/' "$SETTINGS_JSON_PATH" 2>/dev/null || true
     log_success "Wings config applied"
 
@@ -2035,7 +2085,13 @@ run_install() {
     if [[ "$INSTALL_WINGS" == "y" || "$INSTALL_WINGS" == "Y" || "$INSTALL_WINGS" == "yes" || -z "$INSTALL_WINGS" ]]; then
         local wings_remote_url="$FINAL_PANEL_URL"
         [[ "$INSTALL_MODE" == "3" ]] && wings_remote_url="https://${FQDN}"
-        install_wings "$wings_remote_url" "" "$WINGS_API_PORT"
+        # Mode 1 (Tunnel): empty backend_port = use tunnel URL (HTTPS) + --ignore-certificate-errors
+        # Mode 2, 3: use 127.0.0.1:8080
+        if [[ "$INSTALL_MODE" == "1" ]]; then
+            install_wings "$wings_remote_url" "" ""
+        else
+            install_wings "$wings_remote_url" "" "$WINGS_API_PORT"
+        fi
         systemctl enable wings 2>/dev/null || true
         wings_installed=true
     else

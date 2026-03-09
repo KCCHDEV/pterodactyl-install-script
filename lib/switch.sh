@@ -10,6 +10,7 @@ source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/dependencies.sh"
 source "$SCRIPT_DIR/ssl.sh"
 source "$SCRIPT_DIR/cftunnel.sh"
+source "$SCRIPT_DIR/wings.sh"
 
 # Load from settings
 load_switch_context() {
@@ -70,7 +71,7 @@ switch_to_tunnel() {
         local new_url="https://${FQDN}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
-        update_wings_api_port "80"
+        update_wings_remote "$new_url" ""
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
             log_success "Named tunnel. Panel URL: $new_url"
@@ -84,7 +85,7 @@ switch_to_tunnel() {
         local new_url="${tunnel_url:-https://xxx.trycloudflare.com}"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "a"
-        update_wings_api_port "80"
+        update_wings_remote "$new_url" ""
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         log_success "Quick Tunnel: $new_url"
     fi
@@ -104,7 +105,7 @@ switch_to_npm() {
     grep -q "^TRUSTED_PROXIES=" "$PANEL_PATH/.env" 2>/dev/null || echo "TRUSTED_PROXIES=127.0.0.1" >> "$PANEL_PATH/.env"
     sed -i 's|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=127.0.0.1|' "$PANEL_PATH/.env" 2>/dev/null || true
     update_settings_mode "2" "$new_url" ""
-    update_wings_api_port "8080"
+    update_wings_remote "$new_url" "8080"
     sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
     log_success "NPM mode. Add Proxy Host: $FQDN -> 127.0.0.1:8080"
 }
@@ -130,7 +131,7 @@ switch_to_npm_tunnel() {
         local new_url="https://${FQDN} (NPM + CF tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "3" "$new_url" "b" "" "" "$FQDN"
-        update_wings_api_port "8080"
+        update_wings_remote "https://${FQDN}" "8080"
         if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
             log_success "Named tunnel + NPM. Panel URL: $new_url"
         else
@@ -144,7 +145,7 @@ switch_to_npm_tunnel() {
         [[ -z "$tunnel_url" ]] && new_url="https://${FQDN} (NPM) + (journalctl -u cloudflared-tunnel -f for Tunnel)"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "3" "$new_url" "a"
-        update_wings_api_port "8080"
+        update_wings_remote "https://${FQDN}" "8080"
         log_success "NPM + Quick Tunnel: $new_url"
     fi
     sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
@@ -192,7 +193,11 @@ show_wings_next_steps() {
     echo "    - Game ports from Panel Allocations (e.g. 25565, 27015)" >&2
     echo "  Example: ufw allow 2022/tcp && ufw allow 25565/tcp && ufw reload" >&2
     echo "  Node settings in Panel: FQDN=$fqdn, Behind Proxy=Yes, Use SSL=Yes" >&2
-    echo "  Wings connects to Panel at http://127.0.0.1 (local - no TLS verify needed)" >&2
+    if [[ "$mode" == "1" ]]; then
+        echo "  Wings connects to Panel via Tunnel URL (HTTPS, TLS verify disabled)" >&2
+    else
+        echo "  Wings connects to Panel at http://127.0.0.1 (local - no TLS verify needed)" >&2
+    fi
     echo "" >&2
 }
 
@@ -246,12 +251,15 @@ run_configure_wings() {
 
     [[ ! -f "$WINGS_CONFIG" ]] && { log_error "Wings config not found at $WINGS_CONFIG" >&2; return 1; }
 
-    local backend_port="80"
+    local backend_port=""
     [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080"
-    log_info "Adjusting Wings API for Mode $mode (127.0.0.1:$backend_port)..." >&2
+    if [[ -n "$backend_port" ]]; then
+        log_info "Adjusting Wings for Mode $mode (127.0.0.1:$backend_port)..." >&2
+    else
+        log_info "Adjusting Wings for Mode $mode (Tunnel URL + TLS verify disabled)..." >&2
+    fi
     sed -i 's/host:[[:space:]]*[^[:space:]]*/host: 127.0.0.1/' "$WINGS_CONFIG" 2>/dev/null || true
-    update_wings_api_port "$backend_port"
-    sed -i "s|remote: .*|remote: http://127.0.0.1:$backend_port|" "$WINGS_CONFIG" 2>/dev/null || true
+    update_wings_remote "$panel_url" "$backend_port"
     sed -i 's/"wings_installed":[[:space:]]*false/"wings_installed": true/' "$SETTINGS_JSON_PATH" 2>/dev/null || true
     log_success "Wings config applied" >&2
 

@@ -409,7 +409,13 @@ run_install_wings_only() {
     # Use correct API port and URL by install_mode
     local mode fqdn
     mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
-    [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080" || backend_port="80"
+    # Mode 1 (Tunnel): empty backend_port = use tunnel URL + --ignore-certificate-errors
+    # Mode 2, 3: use 127.0.0.1:8080
+    if [[ "$mode" == "2" || "$mode" == "3" ]]; then
+        backend_port="8080"
+    else
+        backend_port=""
+    fi
     # Mode 3: use clean FQDN as panel URL (not the combined NPM+Tunnel string)
     if [[ "$mode" == "3" ]]; then
         fqdn=$(get_json_value "$SETTINGS_JSON_PATH" "fqdn")
@@ -621,7 +627,13 @@ run_install() {
     if [[ "$INSTALL_WINGS" == "y" || "$INSTALL_WINGS" == "Y" || "$INSTALL_WINGS" == "yes" || -z "$INSTALL_WINGS" ]]; then
         local wings_remote_url="$FINAL_PANEL_URL"
         [[ "$INSTALL_MODE" == "3" ]] && wings_remote_url="https://${FQDN}"
-        install_wings "$wings_remote_url" "" "$WINGS_API_PORT"
+        # Mode 1 (Tunnel): empty backend_port = use tunnel URL (HTTPS) + --ignore-certificate-errors
+        # Mode 2, 3: use 127.0.0.1:8080
+        if [[ "$INSTALL_MODE" == "1" ]]; then
+            install_wings "$wings_remote_url" "" ""
+        else
+            install_wings "$wings_remote_url" "" "$WINGS_API_PORT"
+        fi
         systemctl enable wings 2>/dev/null || true
         wings_installed=true
     else
