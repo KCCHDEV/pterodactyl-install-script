@@ -30,11 +30,12 @@ get_settings_path() {
 }
 
 # Get value from JSON file (works without jq)
+# Uses || true to avoid set -e exit when key is missing
 get_json_value() {
     local file="$1"
     local key="$2"
     if [[ -f "$file" ]]; then
-        grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null | sed 's/.*:[[:space:]]*"\(.*\)"/\1/' | head -1
+        grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null | sed 's/.*:[[:space:]]*"\(.*\)"/\1/' | head -1 || true
     fi
 }
 
@@ -1178,7 +1179,7 @@ load_switch_context() {
 
     # Get current install_mode (1=Tunnel, 2=NPM, 3=NPM+Tunnel)
     local mode_line
-    mode_line=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | head -1)
+    mode_line=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | head -1 || true)
     CURRENT_MODE=$(echo "$mode_line" | sed 's/.*:[[:space:]]*"\(.*\)"/\1/')
     CURRENT_MODE="${CURRENT_MODE:-1}"
 
@@ -1877,15 +1878,18 @@ show_wings_next_steps() {
 }
 
 run_configure_wings() {
+    set +e
     if ! is_panel_installed; then
         log_error "Panel not installed. Run Fresh Install first."
+        set -e
         exit 1
     fi
     load_switch_context
     [[ -z "$FQDN" ]] && FQDN=$(get_json_value "$SETTINGS_JSON_PATH" "fqdn")
     [[ -z "$FQDN" ]] && FQDN="localhost"
     local mode
-    mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' || echo "1")
+    mode=$(grep -o '"install_mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_JSON_PATH" 2>/dev/null | sed 's/.*"\([123]\)".*/\1/' | head -1 || echo "1")
+    [[ -z "$mode" ]] && mode="1"
     local panel_url
     panel_url=$(get_json_value "$SETTINGS_JSON_PATH" "panel_url")
     panel_url="${panel_url:-https://${FQDN}}"
@@ -1911,23 +1915,36 @@ run_configure_wings() {
         input="${REPLY:-}"
     fi
     input=$(echo "$input" | xargs)
-    [[ -z "$input" ]] && { log_error "Empty input. Aborted."; return 1; }
+    if [[ -z "$input" ]]; then
+        log_error "Empty input. Aborted."
+        set -e
+        return 1
+    fi
 
     local url="$input"
     if [[ "$input" == curl* ]]; then
-        url=$(echo "$input" | grep -oE 'https?://[^|[:space:]]+' | head -1)
+        url=$(echo "$input" | grep -oE 'https?://[^|[:space:]]+' | head -1 || true)
     fi
-    [[ -z "$url" ]] && { log_error "Could not extract URL. Paste the deployment URL."; return 1; }
+    if [[ -z "$url" ]]; then
+        log_error "Could not extract URL. Paste the deployment URL."
+        set -e
+        return 1
+    fi
 
     log_info "Fetching and applying Wings config from Panel..."
     if curl -sSL "$url" | sudo -E bash; then
         log_success "Deployment script executed"
     else
         log_error "Deployment failed. Check the URL and Panel accessibility."
+        set -e
         return 1
     fi
 
-    [[ ! -f "$WINGS_CONFIG" ]] && { log_error "Wings config not found at $WINGS_CONFIG"; return 1; }
+    if [[ ! -f "$WINGS_CONFIG" ]]; then
+        log_error "Wings config not found at $WINGS_CONFIG"
+        set -e
+        return 1
+    fi
 
     local backend_port=""
     [[ "$mode" == "2" || "$mode" == "3" ]] && backend_port="8080"
@@ -1942,6 +1959,7 @@ run_configure_wings() {
     log_success "Wings config applied"
 
     show_wings_next_steps "$mode" "$FQDN" "$panel_url"
+    set -e
 }
 
 save_credentials() {
