@@ -1218,6 +1218,55 @@ stop_cloudflared_tunnel() {
     log_info "Cloudflared tunnel stopped"
 }
 
+run_create_ssl_cert() {
+    log_info "Create SSL Certificate (for Wings or other services)"
+    echo ""
+    prompt_read "Domain (e.g. local.nagami.cloud): "
+    local domain
+    domain=$(echo "${REPLY:-}" | xargs)
+    if [[ -z "$domain" ]]; then
+        log_error "Domain required."
+        return 1
+    fi
+
+    local cert_dir="/etc/letsencrypt/live/$domain"
+    local cert_path="$cert_dir/fullchain.pem"
+    local key_path="$cert_dir/privkey.pem"
+
+    prompt_read "Email (for Let's Encrypt, or Enter for self-signed only): "
+    local email
+    email=$(echo "${REPLY:-}" | xargs)
+
+    if [[ -n "$email" ]]; then
+        log_info "Trying Let's Encrypt (standalone, port 80 must be free)..."
+        install_certbot 2>/dev/null || apt-get install -y -qq certbot
+        systemctl stop nginx 2>/dev/null || true
+        systemctl stop cloudflared-tunnel 2>/dev/null || true
+        if certbot certonly --standalone -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null; then
+            systemctl start nginx 2>/dev/null || true
+            systemctl start cloudflared-tunnel 2>/dev/null || true
+            log_success "Let's Encrypt certificate created"
+        else
+            systemctl start nginx 2>/dev/null || true
+            systemctl start cloudflared-tunnel 2>/dev/null || true
+            log_warn "Let's Encrypt failed, creating self-signed certificate..."
+            mkdir -p "$cert_dir"
+            generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+        fi
+    else
+        log_info "Creating self-signed certificate..."
+        mkdir -p "$cert_dir"
+        generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+    fi
+
+    echo ""
+    log_success "SSL certificate ready:"
+    echo "  Certificate: $cert_path"
+    echo "  Private key: $key_path"
+    echo ""
+    log_info "For Wings: ensure config.yml ssl paths point to these files."
+}
+
 run_setup_tunnel() {
     log_info "Create Cloudflare Tunnel (standalone)"
     echo ""
@@ -1701,7 +1750,8 @@ main_menu() {
         "6" "Remove and Install - Uninstall then fresh install" \
         "7" "Configure Wings - Apply deployment config from Panel" \
         "8" "Setup Tunnel - Create Cloudflare Tunnel (subdomain + backend)" \
-        "9" "Exit") && [[ -n "$choice" ]]; then
+        "9" "Create SSL Cert - Generate cert for domain (Wings/other)" \
+        "10" "Exit") && [[ -n "$choice" ]]; then
         echo "$choice"
         return 0
     fi
@@ -1719,10 +1769,11 @@ main_menu() {
         echo "  [6] Remove and Install - Uninstall then fresh install"
         echo "  [7] Configure Wings     - Apply deployment config from Panel"
         echo "  [8] Setup Tunnel        - Create Cloudflare Tunnel (subdomain + backend)"
-        echo "  [9] Exit"
+        echo "  [9] Create SSL Cert     - Generate cert for domain (Wings/other)"
+        echo "  [10] Exit"
         echo ""
     } >&2
-    prompt_read "Enter 1-9: "
+    prompt_read "Enter 1-10: "
     echo "${REPLY:-1}"
 }
 
@@ -2284,7 +2335,8 @@ run_main() {
             6) run_remove_and_install; break ;;
             7) run_configure_wings ;;
             8) run_setup_tunnel ;;
-            9) log_info "Exit"; exit 0 ;;
+            9) run_create_ssl_cert ;;
+            10) log_info "Exit"; exit 0 ;;
             *) run_install; break ;;  # Default for invalid input
         esac
     done
