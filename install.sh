@@ -1413,10 +1413,10 @@ credentials-file: $creds_path
 
 ingress:
 EOF
-    while IFS='|' read -r hostname service; do
-        [[ -z "$hostname" || "$hostname" =~ ^# ]] && continue
-        echo "  - hostname: $hostname" >> "$CLOUDFLARED_CONFIG"
-        echo "    service: $service" >> "$CLOUDFLARED_CONFIG"
+    while IFS='|' read -r h s; do
+        [[ -z "$h" || "$h" =~ ^# ]] && continue
+        echo "  - hostname: $h" >> "$CLOUDFLARED_CONFIG"
+        echo "    service: $s" >> "$CLOUDFLARED_CONFIG"
     done < "$ingress_file" 2>/dev/null || true
     echo "  - service: http_status:404" >> "$CLOUDFLARED_CONFIG"
 }
