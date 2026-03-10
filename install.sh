@@ -1590,18 +1590,44 @@ switch_to_tunnel() {
     create_nginx_localhost "$FQDN"
 
     if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
-        NAMED_TUNNEL_READY=0
-        setup_named_tunnel "pterodactyl-panel" "$FQDN"
         local new_url="https://${FQDN}"
+        local tunnel_name creds_path
+        if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+            tunnel_name=$(grep "^tunnel:" "$CLOUDFLARED_CONFIG" 2>/dev/null | sed 's/tunnel:[[:space:]]*//' | head -1)
+            creds_path=$(grep "credentials-file:" "$CLOUDFLARED_CONFIG" 2>/dev/null | sed 's/credentials-file:[[:space:]]*//' | head -1)
+            creds_path="${creds_path:-/etc/cloudflared/pterodactyl-panel.json}"
+            if [[ -n "$tunnel_name" && -f "$creds_path" ]]; then
+                local has_fqdn=""
+                while IFS='|' read -r h _; do [[ "$h" == "$FQDN" ]] && has_fqdn=1; done < <(parse_tunnel_ingress "$CLOUDFLARED_CONFIG")
+                if [[ -z "$has_fqdn" ]]; then
+                    log_info "Adding $FQDN to existing tunnel..." >&2
+                    local tmp_add="/tmp/tunnel-add-$$.txt"
+                    parse_tunnel_ingress "$CLOUDFLARED_CONFIG" > "$tmp_add"
+                    echo "${FQDN}|http://127.0.0.1:80" >> "$tmp_add"
+                    write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_add"
+                    rm -f "$tmp_add"
+                    [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$FQDN" 2>/dev/null
+                    cloudflared tunnel route dns "$tunnel_name" "$FQDN" --overwrite-dns 2>/dev/null || log_warn "Run: cloudflared tunnel route dns $tunnel_name $FQDN --overwrite-dns" >&2
+                    systemctl restart cloudflared-tunnel 2>/dev/null || true
+                    NAMED_TUNNEL_READY=1
+                else
+                    NAMED_TUNNEL_READY=1
+                fi
+            fi
+        fi
+        if [[ "${NAMED_TUNNEL_READY:-0}" != "1" ]]; then
+            NAMED_TUNNEL_READY=0
+            setup_named_tunnel "pterodactyl-panel" "$FQDN"
+        fi
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
         update_wings_remote "$new_url" ""
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
-            log_success "Named tunnel. Panel URL: $new_url"
+            log_success "Named tunnel. Panel URL: $new_url" >&2
         else
-            log_warn "Complete the 5 steps above before the panel will be reachable"
-            log_info "Panel URL (after completing steps): $new_url"
+            log_warn "Complete the 5 steps above before the panel will be reachable" >&2
+            log_info "Panel URL (after completing steps): $new_url" >&2
         fi
     else
         local tunnel_url
