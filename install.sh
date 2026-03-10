@@ -380,16 +380,9 @@ generate_self_signed_ssl() {
     local key_path="${2}"
     local cn="${3:-Generic SSL Certificate}"
 
-    local dir
-    dir=$(dirname "$cert_path")
-    mkdir -p "$dir"
-    dir=$(dirname "$key_path")
-    mkdir -p "$dir"
-
+    mkdir -p "$(dirname "$cert_path")" "$(dirname "$key_path")"
     log_info "Generating self-signed SSL certificate (CN=$cn, 10 years)..."
-    openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
-        -subj "/C=NA/ST=NA/L=NA/O=NA/CN=$cn" \
-        -keyout "$key_path" -out "$cert_path" 2>/dev/null
+    openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 -subj "/C=NA/ST=NA/L=NA/O=NA/CN=$cn" -keyout "$key_path" -out "$cert_path" 2>/dev/null
     chmod 600 "$key_path"
     chmod 644 "$cert_path"
     log_success "Self-signed certificate: $cert_path"
@@ -884,8 +877,10 @@ update_wings_remote() {
     [[ ! -f "$WINGS_CONFIG" ]] && return 0
     local remote_url use_ignore_cert=false
     if [[ -z "$backend_port" && "$panel_url" == https://* ]]; then
-        remote_url="$panel_url"
-        use_ignore_cert=true
+        # CF Tunnel mode: Panel + Wings on same host -> use localhost (no DNS needed)
+        remote_url="http://127.0.0.1:80"
+        sed -i "s/port: [0-9]*/port: 8080/" "$WINGS_CONFIG" 2>/dev/null || true
+        use_ignore_cert=false
     else
         local port="${backend_port:-80}"
         remote_url="http://127.0.0.1:$port"
@@ -1254,30 +1249,68 @@ run_create_ssl_cert() {
     local cert_path="$cert_dir/fullchain.pem"
     local key_path="$cert_dir/privkey.pem"
 
-    prompt_read "Email (for Let's Encrypt, or Enter for self-signed only): "
-    local email
-    email=$(echo "${REPLY:-}" | xargs)
+    echo ""
+    log_info "[1] Let's Encrypt (HTTP) - port 80 must be free, domain must point to public IP"
+    log_info "[2] Let's Encrypt (DNS/Cloudflare) - works with local/private IP, requires API token"
+    log_info "[3] Self-signed only"
+    prompt_read "Choose [1/2/3] (Enter=1): "
+    local mode
+    mode=$(echo "${REPLY:-1}" | xargs)
+    [[ "$mode" != "2" && "$mode" != "3" ]] && mode="1"
 
-    if [[ -n "$email" ]]; then
-        log_info "Trying Let's Encrypt (standalone, port 80 must be free)..."
-        install_certbot 2>/dev/null || apt-get install -y -qq certbot
-        systemctl stop nginx 2>/dev/null || true
-        systemctl stop cloudflared-tunnel 2>/dev/null || true
-        if certbot certonly --standalone -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null; then
-            systemctl start nginx 2>/dev/null || true
-            systemctl start cloudflared-tunnel 2>/dev/null || true
-            log_success "Let's Encrypt certificate created"
-        else
-            systemctl start nginx 2>/dev/null || true
-            systemctl start cloudflared-tunnel 2>/dev/null || true
-            log_warn "Let's Encrypt failed, creating self-signed certificate..."
-            mkdir -p "$cert_dir"
-            generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
-        fi
-    else
+    if [[ "$mode" == "3" ]]; then
         log_info "Creating self-signed certificate..."
         mkdir -p "$cert_dir"
         generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+    else
+        prompt_read "Email (for Let's Encrypt): "
+        local email
+        email=$(echo "${REPLY:-}" | xargs)
+        if [[ -z "$email" ]]; then
+            log_warn "Email required for Let's Encrypt. Creating self-signed instead."
+            mkdir -p "$cert_dir"
+            generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+        elif [[ "$mode" == "2" ]]; then
+            log_info "Using Let's Encrypt with DNS challenge (Cloudflare)..."
+            prompt_read "Cloudflare API Token (Zone:DNS Edit): "
+            local cf_token
+            cf_token=$(echo "${REPLY:-}" | xargs)
+            if [[ -z "$cf_token" ]]; then
+                log_warn "API token required for DNS challenge. Creating self-signed instead."
+                mkdir -p "$cert_dir"
+                generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+            else
+                install_certbot 2>/dev/null || apt-get install -y -qq certbot
+                apt-get install -y -qq python3-certbot-dns-cloudflare 2>/dev/null || pip3 install -q certbot-dns-cloudflare 2>/dev/null || true
+                local cf_ini="/tmp/cf-dns-$$.ini"
+                echo "dns_cloudflare_api_token = $cf_token" > "$cf_ini"
+                chmod 600 "$cf_ini"
+                if certbot certonly --dns-cloudflare --dns-cloudflare-credentials "$cf_ini" -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null; then
+                    log_success "Let's Encrypt certificate created (DNS challenge)"
+                else
+                    log_warn "DNS challenge failed, creating self-signed certificate..."
+                    mkdir -p "$cert_dir"
+                    generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+                fi
+                rm -f "$cf_ini"
+            fi
+        else
+            log_info "Trying Let's Encrypt (standalone, port 80 must be free)..."
+            install_certbot 2>/dev/null || apt-get install -y -qq certbot
+            systemctl stop nginx 2>/dev/null || true
+            systemctl stop cloudflared-tunnel 2>/dev/null || true
+            if certbot certonly --standalone -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null; then
+                systemctl start nginx 2>/dev/null || true
+                systemctl start cloudflared-tunnel 2>/dev/null || true
+                log_success "Let's Encrypt certificate created"
+            else
+                systemctl start nginx 2>/dev/null || true
+                systemctl start cloudflared-tunnel 2>/dev/null || true
+                log_warn "Let's Encrypt failed, creating self-signed certificate..."
+                mkdir -p "$cert_dir"
+                generate_self_signed_ssl "$cert_path" "$key_path" "$domain"
+            fi
+        fi
     fi
 
     echo ""
