@@ -960,7 +960,8 @@ CFTUNNEL
 
     systemctl daemon-reload
     systemctl enable cloudflared-tunnel
-    systemctl start cloudflared-tunnel
+    systemctl restart cloudflared-tunnel
+    sleep 2
 
     log_info "Waiting for tunnel URL..."
     for _ in 1 2 3 4 5; do
@@ -1012,7 +1013,8 @@ CFTUNNEL
 
     systemctl daemon-reload
     systemctl enable cloudflared-tunnel
-    systemctl start cloudflared-tunnel
+    systemctl restart cloudflared-tunnel
+    sleep 2
 
     log_info "Waiting for tunnel URL..."
     for _ in 1 2 3 4 5; do
@@ -1063,7 +1065,8 @@ CFTUNNEL
 
     systemctl daemon-reload
     systemctl enable cloudflared-tunnel
-    systemctl start cloudflared-tunnel
+    systemctl restart cloudflared-tunnel
+    sleep 2
 
     log_info "Waiting for tunnel URL..."
     for _ in 1 2 3 4 5; do
@@ -1097,6 +1100,8 @@ setup_named_tunnel() {
     log_info "Setting up Named Tunnel: $tunnel_name for $domain (->$backend_url)..."
 
     install_cloudflared
+    pkill -f "cloudflared tunnel" 2>/dev/null || true
+    sleep 2
 
     mkdir -p /etc/cloudflared
 
@@ -1191,7 +1196,8 @@ EOF
     systemctl daemon-reload
     systemctl enable cloudflared-tunnel 2>/dev/null || true
     if [[ -f "$credentials_path" ]]; then
-        systemctl start cloudflared-tunnel 2>/dev/null || true
+        systemctl restart cloudflared-tunnel 2>/dev/null || true
+        sleep 2
         log_success "Named tunnel started. Panel URL: https://${domain}"
         NAMED_TUNNEL_READY=1
     else
@@ -1329,6 +1335,7 @@ run_tunnel_manager() {
             echo "  [1] Add hostname"
             echo "  [2] Remove hostname"
             echo "  [3] Create new (overwrite)"
+            echo "  [4] Restart tunnel"
         else
             log_info "No Named Tunnel config found."
             echo ""
@@ -1435,6 +1442,11 @@ run_tunnel_manager() {
                         [[ "$b" =~ ^[0-9]+$ ]] && b="127.0.0.1:$b"
                         setup_quick_tunnel_to_backend "$b"
                     fi
+                fi
+                ;;
+            4)
+                if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    systemctl restart cloudflared-tunnel 2>/dev/null && log_success "Tunnel restarted" || log_error "Restart failed"
                 fi
                 ;;
             *) log_warn "Invalid choice." ;;
