@@ -1336,6 +1336,7 @@ run_tunnel_manager() {
             echo "  [2] Remove hostname"
             echo "  [3] Create new (overwrite)"
             echo "  [4] Restart tunnel"
+            echo "  [5] Re-apply DNS routes (fix 1033 error)"
         else
             log_info "No Named Tunnel config found."
             echo ""
@@ -1370,9 +1371,13 @@ run_tunnel_manager() {
                     echo "${hostname}|${backend}" >> "$tmp_ingress"
                     write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_ingress"
                     rm -f "$tmp_ingress"
+                    if cloudflared tunnel route dns "$tunnel_name" "$hostname" --overwrite-dns 2>/dev/null; then
+                        log_success "DNS route: $hostname -> $tunnel_name"
+                    else
+                        log_warn "DNS route failed. Run manually: cloudflared tunnel route dns $tunnel_name $hostname --overwrite-dns"
+                    fi
                     systemctl restart cloudflared-tunnel 2>/dev/null || true
                     log_success "Added $hostname -> $backend"
-                    cloudflared tunnel route dns "$tunnel_name" "$hostname" 2>/dev/null || log_info "Run: cloudflared tunnel route dns $tunnel_name $hostname"
                 else
                     prompt_read "Backend (host:port, default 127.0.0.1:80): "
                     local b="${REPLY:-127.0.0.1:80}"
@@ -1447,6 +1452,18 @@ run_tunnel_manager() {
             4)
                 if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
                     systemctl restart cloudflared-tunnel 2>/dev/null && log_success "Tunnel restarted" || log_error "Restart failed"
+                fi
+                ;;
+            5)
+                if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    log_info "Applying DNS routes for all hostnames..."
+                    parse_tunnel_ingress "$CLOUDFLARED_CONFIG" | while IFS='|' read -r h _; do
+                        if cloudflared tunnel route dns "$tunnel_name" "$h" --overwrite-dns 2>/dev/null; then
+                            log_success "DNS: $h -> $tunnel_name"
+                        else
+                            log_warn "DNS failed for $h"
+                        fi
+                    done
                 fi
                 ;;
             *) log_warn "Invalid choice." ;;
