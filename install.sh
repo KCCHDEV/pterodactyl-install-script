@@ -1324,6 +1324,26 @@ parse_tunnel_ingress() {
     done < "$config"
 }
 
+# Write systemd service for Named Tunnel (config must exist)
+write_cloudflared_service() {
+    local tunnel_name="${1:-pterodactyl-panel}"
+    cat > "$CLOUDFLARED_SERVICE" << EOF
+[Unit]
+Description=Cloudflare Tunnel for Pterodactyl Panel
+After=network.target nginx.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --config /etc/cloudflared/config.yml run $tunnel_name
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+}
+
 # Write Named Tunnel config with ingress list (format: hostname|service per line)
 write_tunnel_config() {
     local tunnel_name="$1"
@@ -1616,13 +1636,17 @@ switch_to_tunnel() {
                     echo "${FQDN}|http://127.0.0.1:80" >> "$tmp_add"
                     write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_add"
                     rm -f "$tmp_add"
-                    [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$FQDN" 2>/dev/null
-                    cloudflared tunnel route dns "$tunnel_name" "$FQDN" --overwrite-dns 2>/dev/null || log_warn "Run: cloudflared tunnel route dns $tunnel_name $FQDN --overwrite-dns" >&2
-                    systemctl restart cloudflared-tunnel 2>/dev/null || true
-                    NAMED_TUNNEL_READY=1
-                else
-                    NAMED_TUNNEL_READY=1
                 fi
+                write_cloudflared_service "$tunnel_name"
+                systemctl enable cloudflared-tunnel 2>/dev/null || true
+                [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$FQDN" 2>/dev/null
+                if cloudflared tunnel route dns "$tunnel_name" "$FQDN" --overwrite-dns 2>/dev/null; then
+                    log_success "DNS route: $FQDN -> $tunnel_name" >&2
+                else
+                    log_warn "DNS route failed. Use Tunnel Manager [6] with API token" >&2
+                fi
+                systemctl restart cloudflared-tunnel 2>/dev/null || true
+                NAMED_TUNNEL_READY=1
             fi
         fi
         if [[ "${NAMED_TUNNEL_READY:-0}" != "1" ]]; then
