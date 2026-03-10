@@ -1267,44 +1267,183 @@ run_create_ssl_cert() {
     log_info "For Wings: ensure config.yml ssl paths point to these files."
 }
 
-run_setup_tunnel() {
-    log_info "Create Cloudflare Tunnel (standalone)"
-    echo ""
-    echo "  [a] Quick Tunnel  - trycloudflare.com (no account, URL changes on restart)"
-    echo "  [b] Named Tunnel  - Your subdomain (e.g. panel.example.com, needs Cloudflare)"
-    echo ""
-    prompt_read "Choose [a/b]: "
-    local tunnel_type
-    tunnel_type=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
-    [[ "$tunnel_type" != "b" ]] && tunnel_type="a"
-
-    prompt_read "Backend (host:port, e.g. 127.0.0.1:80 or just 80): "
-    local backend="${REPLY:-127.0.0.1:80}"
-    backend=$(echo "$backend" | xargs)
-    if [[ -z "$backend" ]]; then
-        backend="127.0.0.1:80"
-    elif [[ "$backend" =~ ^[0-9]+$ ]]; then
-        backend="127.0.0.1:$backend"
-    fi
-
-    if [[ "$tunnel_type" == "a" ]]; then
-        setup_quick_tunnel_to_backend "$backend"
-        echo ""
-        log_success "Quick Tunnel started. Use the URL above to access your service."
-    else
-        prompt_read "Subdomain (e.g. panel.example.com): "
-        local subdomain="${REPLY:-}"
-        subdomain=$(echo "$subdomain" | xargs)
-        if [[ -z "$subdomain" ]]; then
-            log_error "Subdomain required for Named Tunnel."
-            return 1
+# Parse Named Tunnel config, output ingress as hostname|service per line
+parse_tunnel_ingress() {
+    local config="${1:-$CLOUDFLARED_CONFIG}"
+    [[ ! -f "$config" ]] && return
+    local hostname="" service=""
+    while IFS= read -r line; do
+        if [[ "$line" =~ hostname:[[:space:]]*(.+) ]]; then
+            hostname=$(echo "${BASH_REMATCH[1]}" | xargs)
+        elif [[ -n "$hostname" && "$line" =~ service:[[:space:]]*(.+) ]]; then
+            service=$(echo "${BASH_REMATCH[1]}" | xargs)
+            [[ "$service" != *"http_status"* ]] && echo "${hostname}|${service}"
+            hostname=""
+            service=""
         fi
-        local tunnel_name="tunnel-$(echo "$subdomain" | tr '.' '-')"
-        setup_named_tunnel "$tunnel_name" "$subdomain" "80" "$backend"
+    done < "$config"
+}
+
+# Write Named Tunnel config with ingress list (format: hostname|service per line)
+write_tunnel_config() {
+    local tunnel_name="$1"
+    local creds_path="$2"
+    local ingress_file="$3"
+    cat > "$CLOUDFLARED_CONFIG" << EOF
+tunnel: $tunnel_name
+credentials-file: $creds_path
+
+ingress:
+EOF
+    while IFS='|' read -r hostname service; do
+        [[ -z "$hostname" || "$hostname" =~ ^# ]] && continue
+        echo "  - hostname: $hostname" >> "$CLOUDFLARED_CONFIG"
+        echo "    service: $service" >> "$CLOUDFLARED_CONFIG"
+    done < "$ingress_file" 2>/dev/null || true
+    echo "  - service: http_status:404" >> "$CLOUDFLARED_CONFIG"
+}
+
+run_tunnel_manager() {
+    install_cloudflared 2>/dev/null || apt-get install -y -qq cloudflared
+    local tmp_ingress="/tmp/tunnel-ingress-$$.txt"
+
+    while true; do
         echo ""
-        log_success "Named Tunnel configured for https://${subdomain}"
-        log_info "If not started: run 'cloudflared tunnel login' then the steps shown above."
-    fi
+        echo "=============================================="
+        echo "  Tunnel Manager"
+        echo "=============================================="
+        echo ""
+
+        if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+            local tunnel_name creds_path
+            tunnel_name=$(grep "^tunnel:" "$CLOUDFLARED_CONFIG" 2>/dev/null | sed 's/tunnel:[[:space:]]*//' | head -1)
+            creds_path=$(grep "credentials-file:" "$CLOUDFLARED_CONFIG" 2>/dev/null | sed 's/credentials-file:[[:space:]]*//' | head -1)
+            tunnel_name="${tunnel_name:-pterodactyl-panel}"
+            creds_path="${creds_path:-/etc/cloudflared/pterodactyl-panel.json}"
+
+            log_info "Current ingress:"
+            parse_tunnel_ingress "$CLOUDFLARED_CONFIG" | while IFS='|' read -r h s; do
+                echo "    - $h -> $s"
+            done
+            echo ""
+            echo "  [1] Add hostname"
+            echo "  [2] Remove hostname"
+            echo "  [3] Create new (overwrite)"
+        else
+            log_info "No Named Tunnel config found."
+            echo ""
+            echo "  [1] Create Quick Tunnel (trycloudflare.com)"
+            echo "  [2] Create Named Tunnel (your subdomain)"
+        fi
+        echo "  [0] Back to main menu"
+        echo ""
+        prompt_read "Choose: "
+        local choice
+        choice=$(echo "${REPLY:-}" | xargs)
+
+        case "$choice" in
+            0) rm -f "$tmp_ingress" 2>/dev/null; return 0 ;;
+            1)
+                if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    prompt_read "Hostname (e.g. panel.example.com): "
+                    local hostname
+                    hostname=$(echo "${REPLY:-}" | xargs)
+                    if [[ -z "$hostname" ]]; then
+                        log_error "Hostname required."
+                        continue
+                    fi
+                    prompt_read "Backend (host:port, e.g. 127.0.0.1:80): "
+                    local backend="${REPLY:-127.0.0.1:80}"
+                    backend=$(echo "$backend" | xargs)
+                    [[ "$backend" =~ ^[0-9]+$ ]] && backend="127.0.0.1:$backend"
+                    [[ -z "$backend" ]] && backend="127.0.0.1:80"
+                    [[ "$backend" != http* ]] && backend="http://$backend"
+
+                    parse_tunnel_ingress "$CLOUDFLARED_CONFIG" > "$tmp_ingress"
+                    echo "${hostname}|${backend}" >> "$tmp_ingress"
+                    write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_ingress"
+                    rm -f "$tmp_ingress"
+                    systemctl restart cloudflared-tunnel 2>/dev/null || true
+                    log_success "Added $hostname -> $backend"
+                    cloudflared tunnel route dns "$tunnel_name" "$hostname" 2>/dev/null || log_info "Run: cloudflared tunnel route dns $tunnel_name $hostname"
+                else
+                    prompt_read "Backend (host:port, default 127.0.0.1:80): "
+                    local b="${REPLY:-127.0.0.1:80}"
+                    b=$(echo "$b" | xargs)
+                    [[ "$b" =~ ^[0-9]+$ ]] && b="127.0.0.1:$b"
+                    [[ -z "$b" ]] && b="127.0.0.1:80"
+                    setup_quick_tunnel_to_backend "$b"
+                fi
+                ;;
+            2)
+                if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    prompt_read "Hostname to remove: "
+                    local remove_h
+                    remove_h=$(echo "${REPLY:-}" | xargs)
+                    if [[ -z "$remove_h" ]]; then
+                        log_warn "Cancelled."
+                        continue
+                    fi
+                    parse_tunnel_ingress "$CLOUDFLARED_CONFIG" | while IFS='|' read -r h s; do
+                        [[ "$h" != "$remove_h" ]] && echo "${h}|${s}"
+                    done > "$tmp_ingress" 2>/dev/null || true
+                    local count
+                    count=$(wc -l < "$tmp_ingress" 2>/dev/null || echo 0)
+                    if [[ "$count" -eq 0 ]]; then
+                        log_error "Cannot remove last hostname. Delete config to switch to Quick Tunnel."
+                        rm -f "$tmp_ingress"
+                        continue
+                    fi
+                    write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_ingress"
+                    rm -f "$tmp_ingress"
+                    systemctl restart cloudflared-tunnel 2>/dev/null || true
+                    log_success "Removed $remove_h"
+                else
+                    prompt_read "Subdomain (e.g. panel.example.com): "
+                    local sub
+                    sub=$(echo "${REPLY:-}" | xargs)
+                    if [[ -z "$sub" ]]; then
+                        log_error "Subdomain required."
+                        continue
+                    fi
+                    prompt_read "Backend (host:port): "
+                    local back="${REPLY:-127.0.0.1:80}"
+                    back=$(echo "$back" | xargs)
+                    [[ "$back" =~ ^[0-9]+$ ]] && back="127.0.0.1:$back"
+                    [[ -z "$back" ]] && back="127.0.0.1:80"
+                    local tname="tunnel-$(echo "$sub" | tr '.' '-')"
+                    setup_named_tunnel "$tname" "$sub" "80" "$back"
+                fi
+                ;;
+            3)
+                if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    { echo ""; log_warn "This will overwrite current tunnel config."; echo ""; } >&2
+                    prompt_read "Create Quick [a] or Named [b] tunnel? [a/b]: "
+                    local t
+                    t=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+                    rm -f "$CLOUDFLARED_CONFIG"
+                    if [[ "$t" == "b" ]]; then
+                        prompt_read "Subdomain: "
+                        local sub="${REPLY:-}"
+                        prompt_read "Backend (host:port): "
+                        local back="${REPLY:-127.0.0.1:80}"
+                        [[ "$back" =~ ^[0-9]+$ ]] && back="127.0.0.1:$back"
+                        [[ -n "$sub" ]] && setup_named_tunnel "tunnel-$(echo "$sub" | tr '.' '-')" "$sub" "80" "$back"
+                    else
+                        prompt_read "Backend (host:port): "
+                        local b="${REPLY:-127.0.0.1:80}"
+                        [[ "$b" =~ ^[0-9]+$ ]] && b="127.0.0.1:$b"
+                        setup_quick_tunnel_to_backend "$b"
+                    fi
+                fi
+                ;;
+            *) log_warn "Invalid choice." ;;
+        esac
+    done
+}
+
+run_setup_tunnel() {
+    run_tunnel_manager
 }
 # Pterodactyl Panel - Switch Mode (Tunnel / NPM / NPM+Tunnel)
 # Switch between modes for existing panel installation
@@ -1749,7 +1888,7 @@ main_menu() {
         "5" "Remove - Uninstall panel, wings, database" \
         "6" "Remove and Install - Uninstall then fresh install" \
         "7" "Configure Wings - Apply deployment config from Panel" \
-        "8" "Setup Tunnel - Create Cloudflare Tunnel (subdomain + backend)" \
+        "8" "Tunnel Manager - Add/Remove hostnames (Cloudflare Tunnel)" \
         "9" "Create SSL Cert - Generate cert for domain (Wings/other)" \
         "10" "Exit") && [[ -n "$choice" ]]; then
         echo "$choice"
@@ -1768,7 +1907,7 @@ main_menu() {
         echo "  [5] Remove             - Uninstall panel, wings, database"
         echo "  [6] Remove and Install - Uninstall then fresh install"
         echo "  [7] Configure Wings     - Apply deployment config from Panel"
-        echo "  [8] Setup Tunnel        - Create Cloudflare Tunnel (subdomain + backend)"
+        echo "  [8] Tunnel Manager      - Add/Remove hostnames (Cloudflare Tunnel)"
         echo "  [9] Create SSL Cert     - Generate cert for domain (Wings/other)"
         echo "  [10] Exit"
         echo ""
