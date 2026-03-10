@@ -1457,13 +1457,18 @@ run_tunnel_manager() {
             5)
                 if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
                     log_info "Applying DNS routes for all hostnames..."
-                    parse_tunnel_ingress "$CLOUDFLARED_CONFIG" | while IFS='|' read -r h _; do
-                        if cloudflared tunnel route dns "$tunnel_name" "$h" --overwrite-dns 2>/dev/null; then
+                    while IFS='|' read -r h _; do
+                        local out
+                        out=$(cloudflared tunnel route dns "$tunnel_name" "$h" --overwrite-dns 2>&1)
+                        if [[ $? -eq 0 ]]; then
                             log_success "DNS: $h -> $tunnel_name"
                         else
                             log_warn "DNS failed for $h"
+                            [[ -n "$out" ]] && echo "    $out" >&2
                         fi
-                    done
+                    done < <(parse_tunnel_ingress "$CLOUDFLARED_CONFIG")
+                    echo "" >&2
+                    log_info "If DNS failed: ensure nagami.cloud is on Cloudflare, or add Public Hostname in Zero Trust dashboard"
                 fi
                 ;;
             *) log_warn "Invalid choice." ;;
