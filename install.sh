@@ -121,7 +121,7 @@ is_installed() {
 
 USE_TUI=0
 TUI_CMD=""
-if [[ -t 0 ]] && [[ -e /dev/tty ]]; then
+if [[ -t 0 ]] && [[ -e /dev/tty ]] && [[ "${TERM:-}" != "dumb" ]]; then
     if command -v dialog &>/dev/null; then
         TUI_CMD="dialog"
         USE_TUI=1
@@ -1415,8 +1415,8 @@ PERSISTENT_CONFIG="/root/.pterodactyl-install-config"
 
 prompt_inputs() {
     # When run via curl|bash, stdin is pipe - read from /dev/tty for user input
-    prompt_read() { [[ -e /dev/tty ]] && read -rp "$1" < /dev/tty || read -rp "$1"; }
-    prompt_read_s() { [[ -e /dev/tty ]] && read -rsp "$1" < /dev/tty || read -rsp "$1"; }
+    prompt_read() { if [[ -e /dev/tty ]]; then read -rp "$1" < /dev/tty || true; else read -rp "$1" || true; fi; }
+    prompt_read_s() { if [[ -e /dev/tty ]]; then read -rsp "$1" < /dev/tty || true; else read -rsp "$1" || true; fi; }
 
     echo ""
     echo "=============================================="
@@ -1583,7 +1583,11 @@ is_panel_installed() {
 }
 
 prompt_read() {
-    [[ -e /dev/tty ]] && read -rp "$1" < /dev/tty || read -rp "$1"
+    if [[ -e /dev/tty ]]; then
+        read -rp "$1" < /dev/tty || true
+    else
+        read -rp "$1" || true
+    fi
 }
 
 main_menu() {
@@ -2132,10 +2136,15 @@ run_install() {
 }
 run_main() {
     check_root
+    if [[ ! -t 0 ]] && [[ ! -e /dev/tty ]]; then
+        log_error "This script requires an interactive terminal. Run: sudo bash install.sh"
+        exit 1
+    fi
     ensure_tui 2>/dev/null || true
     local choice
     while true; do
-        choice=$(main_menu)
+        choice=$(main_menu) || choice=""
+        [[ -z "$choice" ]] && continue
         case "$choice" in
             1) run_install; break ;;
             2) run_switch_mode ;;
@@ -2145,7 +2154,7 @@ run_main() {
             6) run_remove_and_install; break ;;
             7) run_configure_wings ;;
             8) log_info "Exit"; exit 0 ;;
-            *) run_install; break ;;  # Default to fresh install for non-interactive
+            *) run_install; break ;;  # Default for invalid input
         esac
     done
 }
