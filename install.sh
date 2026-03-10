@@ -1145,6 +1145,16 @@ setup_named_tunnel() {
         fi
     fi
 
+    # Always run route dns when credentials exist (for both new and existing tunnels)
+    if [[ -f "$credentials_path" ]]; then
+        [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$domain" 2>/dev/null
+        if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns 2>/dev/null; then
+            log_success "DNS route: $domain -> $tunnel_name"
+        else
+            log_warn "DNS route failed. Use Tunnel Manager [6] with API token, or: cloudflared tunnel route dns $tunnel_name $domain --overwrite-dns"
+        fi
+    fi
+
     # Auto-detect credentials: cloudflared creates ~/.cloudflared/<UUID>.json
     if [[ ! -f "$credentials_path" && -d /root/.cloudflared ]]; then
         local creds_found=""
