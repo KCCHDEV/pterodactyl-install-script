@@ -978,6 +978,58 @@ CFTUNNEL
     [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
 }
 
+setup_quick_tunnel_to_backend() {
+    # Quick tunnel to custom backend (e.g. 127.0.0.1:80 or 192.168.1.10:8080)
+    local backend="${1:-127.0.0.1:80}"
+    if [[ "$backend" =~ ^[0-9]+$ ]]; then
+        backend="127.0.0.1:$backend"
+    fi
+    local tunnel_url=""
+    {
+    log_info "Starting Quick Tunnel to $backend..."
+
+    install_cloudflared
+    pkill -f "cloudflared tunnel" 2>/dev/null || true
+    sleep 1
+    rm -f /etc/cloudflared/config.yml /root/.cloudflared/config.yml 2>/dev/null
+    mkdir -p /etc/cloudflared
+
+    cat > "$CLOUDFLARED_SERVICE" << CFTUNNEL
+[Unit]
+Description=Cloudflare Quick Tunnel (-> $backend)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/tmp
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://$backend
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+CFTUNNEL
+
+    systemctl daemon-reload
+    systemctl enable cloudflared-tunnel
+    systemctl start cloudflared-tunnel
+
+    log_info "Waiting for tunnel URL..."
+    for _ in 1 2 3 4 5; do
+        sleep 3
+        tunnel_url=$(journalctl -u cloudflared-tunnel -n 100 --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
+        [[ -n "$tunnel_url" ]] && break
+    done
+
+    if [[ -n "$tunnel_url" ]]; then
+        log_success "Quick Tunnel: $tunnel_url"
+    else
+        log_warn "Run 'journalctl -u cloudflared-tunnel -f' to see your tunnel URL"
+    fi
+    } >&2
+    [[ -n "$tunnel_url" ]] && echo "$tunnel_url"
+}
+
 setup_quick_tunnel_to_port() {
     # Quick tunnel pointing to custom port (e.g. 8080 for NPM backend)
     local port="${1:-80}"
@@ -1033,9 +1085,16 @@ setup_named_tunnel() {
     local tunnel_name="${1:-pterodactyl-panel}"
     local domain="${2}"
     local port="${3:-80}"
+    local backend_override="${4:-}"
+    local backend_url
+    if [[ -n "$backend_override" ]]; then
+        backend_url="http://$backend_override"
+    else
+        backend_url="http://127.0.0.1:$port"
+    fi
     local credentials_path="/etc/cloudflared/${tunnel_name}.json"
 
-    log_info "Setting up Named Tunnel: $tunnel_name for $domain (->127.0.0.1:$port)..."
+    log_info "Setting up Named Tunnel: $tunnel_name for $domain (->$backend_url)..."
 
     install_cloudflared
 
@@ -1110,7 +1169,7 @@ credentials-file: $credentials_path
 
 ingress:
   - hostname: $domain
-    service: http://127.0.0.1:$port
+    service: $backend_url
   - service: http_status:404
 EOF
 
@@ -1157,6 +1216,46 @@ stop_cloudflared_tunnel() {
     rm -f "$CLOUDFLARED_SERVICE"
     pkill -f "cloudflared tunnel" 2>/dev/null || true
     log_info "Cloudflared tunnel stopped"
+}
+
+run_setup_tunnel() {
+    log_info "Create Cloudflare Tunnel (standalone)"
+    echo ""
+    echo "  [a] Quick Tunnel  - trycloudflare.com (no account, URL changes on restart)"
+    echo "  [b] Named Tunnel  - Your subdomain (e.g. panel.example.com, needs Cloudflare)"
+    echo ""
+    prompt_read "Choose [a/b]: "
+    local tunnel_type
+    tunnel_type=$(echo "${REPLY:-a}" | tr '[:upper:]' '[:lower:]')
+    [[ "$tunnel_type" != "b" ]] && tunnel_type="a"
+
+    prompt_read "Backend (host:port, e.g. 127.0.0.1:80 or just 80): "
+    local backend="${REPLY:-127.0.0.1:80}"
+    backend=$(echo "$backend" | xargs)
+    if [[ -z "$backend" ]]; then
+        backend="127.0.0.1:80"
+    elif [[ "$backend" =~ ^[0-9]+$ ]]; then
+        backend="127.0.0.1:$backend"
+    fi
+
+    if [[ "$tunnel_type" == "a" ]]; then
+        setup_quick_tunnel_to_backend "$backend"
+        echo ""
+        log_success "Quick Tunnel started. Use the URL above to access your service."
+    else
+        prompt_read "Subdomain (e.g. panel.example.com): "
+        local subdomain="${REPLY:-}"
+        subdomain=$(echo "$subdomain" | xargs)
+        if [[ -z "$subdomain" ]]; then
+            log_error "Subdomain required for Named Tunnel."
+            return 1
+        fi
+        local tunnel_name="tunnel-$(echo "$subdomain" | tr '.' '-')"
+        setup_named_tunnel "$tunnel_name" "$subdomain" "80" "$backend"
+        echo ""
+        log_success "Named Tunnel configured for https://${subdomain}"
+        log_info "If not started: run 'cloudflared tunnel login' then the steps shown above."
+    fi
 }
 # Pterodactyl Panel - Switch Mode (Tunnel / NPM / NPM+Tunnel)
 # Switch between modes for existing panel installation
@@ -1593,7 +1692,7 @@ prompt_read() {
 
 main_menu() {
     local choice
-    if choice=$(tui_menu "Pterodactyl Panel" "Select an option:" 18 70 \
+    if choice=$(tui_menu "Pterodactyl Panel" "Select an option:" 20 70 \
         "1" "Fresh Install - Full panel installation" \
         "2" "Switch Mode - Change HTTP / HTTPS / CF Tunnel" \
         "3" "Install Wings - Add Wings daemon (game servers)" \
@@ -1601,7 +1700,8 @@ main_menu() {
         "5" "Remove - Uninstall panel, wings, database" \
         "6" "Remove and Install - Uninstall then fresh install" \
         "7" "Configure Wings - Apply deployment config from Panel" \
-        "8" "Exit") && [[ -n "$choice" ]]; then
+        "8" "Setup Tunnel - Create Cloudflare Tunnel (subdomain + backend)" \
+        "9" "Exit") && [[ -n "$choice" ]]; then
         echo "$choice"
         return 0
     fi
@@ -1618,10 +1718,11 @@ main_menu() {
         echo "  [5] Remove             - Uninstall panel, wings, database"
         echo "  [6] Remove and Install - Uninstall then fresh install"
         echo "  [7] Configure Wings     - Apply deployment config from Panel"
-        echo "  [8] Exit"
+        echo "  [8] Setup Tunnel        - Create Cloudflare Tunnel (subdomain + backend)"
+        echo "  [9] Exit"
         echo ""
     } >&2
-    prompt_read "Enter 1-8: "
+    prompt_read "Enter 1-9: "
     echo "${REPLY:-1}"
 }
 
@@ -2171,7 +2272,8 @@ run_main() {
             5) run_remove; break ;;
             6) run_remove_and_install; break ;;
             7) run_configure_wings ;;
-            8) log_info "Exit"; exit 0 ;;
+            8) run_setup_tunnel ;;
+            9) log_info "Exit"; exit 0 ;;
             *) run_install; break ;;  # Default for invalid input
         esac
     done
