@@ -2008,8 +2008,7 @@ run_configure_wings() {
             echo "2. Nodes -> Create Node (or select existing)"
             echo "3. Configuration tab -> Copy the deployment command"
             echo ""
-            log_info "Paste the deployment URL (e.g. https://panel.example.com/api/application/nodes/1/configuration)"
-            log_info "Or paste the full command (we will extract the URL)"
+            log_info "Paste: deployment URL, curl command, or wings configure command"
             echo ""
         } >&2
         prompt_read "Deployment URL or command: "
@@ -2022,23 +2021,35 @@ run_configure_wings() {
         return 1
     fi
 
-    local url="$input"
-    if [[ "$input" == curl* ]]; then
-        url=$(echo "$input" | grep -oE 'https?://[^|[:space:]]+' | head -1 || true)
-    fi
-    if [[ -z "$url" ]]; then
-        log_error "Could not extract URL. Paste the deployment URL."
-        set -e
-        return 1
-    fi
-
-    log_info "Fetching and applying Wings config from Panel..."
-    if curl -sSL "$url" | sudo -E bash; then
-        log_success "Deployment script executed"
+    # Detect format: wings configure command, curl URL/command, or plain URL
+    if [[ "$input" == *"wings configure"* ]]; then
+        log_info "Running wings configure command..."
+        if eval "$input"; then
+            log_success "wings configure executed"
+        else
+            log_error "wings configure failed."
+            set -e
+            return 1
+        fi
     else
-        log_error "Deployment failed. Check the URL and Panel accessibility."
-        set -e
-        return 1
+        local url="$input"
+        if [[ "$input" == curl* ]]; then
+            url=$(echo "$input" | grep -oE 'https?://[^|[:space:]]+' | head -1 || true)
+        fi
+        if [[ -z "$url" ]] || [[ "$url" != https* && "$url" != http* ]]; then
+            log_error "Could not extract URL. Paste deployment URL, curl command, or wings configure command."
+            set -e
+            return 1
+        fi
+
+        log_info "Fetching and applying Wings config from Panel..."
+        if curl -sSL "$url" | sudo -E bash; then
+            log_success "Deployment script executed"
+        else
+            log_error "Deployment failed. Check the URL and Panel accessibility."
+            set -e
+            return 1
+        fi
     fi
 
     if [[ ! -f "$WINGS_CONFIG" ]]; then
