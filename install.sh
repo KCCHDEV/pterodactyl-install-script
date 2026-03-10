@@ -1136,14 +1136,11 @@ setup_named_tunnel() {
             [[ -n "$create_out" ]] && echo "$create_out" | head -5
         fi
         if [[ -f "$credentials_path" ]]; then
-            if cloudflared tunnel route dns "$tunnel_name" "$domain"; then
+            [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$domain" 2>/dev/null
+            if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns 2>/dev/null; then
                 log_success "DNS route created: $domain -> $tunnel_name"
             else
-                if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns; then
-                    log_success "DNS route created: $domain -> $tunnel_name"
-                else
-                    log_warn "Auto-setup: route dns failed. Ensure domain $domain is in Cloudflare."
-                fi
+                log_warn "DNS route failed. Set CLOUDFLARE_API_TOKEN and retry, or delete existing record in Cloudflare DNS manually."
             fi
         fi
     fi
@@ -1273,6 +1270,33 @@ run_create_ssl_cert() {
     log_info "For Wings: ensure config.yml ssl paths point to these files."
 }
 
+# Delete Cloudflare DNS record for hostname (needs API token) - resolves "record already exists"
+cf_delete_dns_for_hostname() {
+    local hostname="$1"
+    local token="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-}}"
+    [[ -z "$token" ]] && return 1
+    local domain
+    domain=$(echo "$hostname" | sed 's/^[^.]*\.//')  # e.g. panel-test.nagami.cloud -> nagami.cloud
+    [[ -z "$domain" ]] && return 1
+    local zone_id
+    zone_id=$(curl -sS -H "Authorization: Bearer $token" "https://api.cloudflare.com/client/v4/zones?name=$domain" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
+    [[ -z "$zone_id" ]] && return 1
+    local records_json
+    records_json=$(curl -sS -H "Authorization: Bearer $token" "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?name=$hostname" 2>/dev/null)
+    if command -v python3 &>/dev/null; then
+        local record_ids
+        record_ids=$(echo "$records_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(' '.join(r['id'] for r in d.get('result',[])))" 2>/dev/null)
+    else
+        local record_ids
+        record_ids=$(echo "$records_json" | grep -o '"id":"[a-f0-9]*"' | sed 's/"id":"//;s/"//' | head -5)
+    fi
+    [[ -z "$record_ids" ]] && return 0
+    for rid in $record_ids; do
+        curl -sS -X DELETE -H "Authorization: Bearer $token" "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records/$rid" >/dev/null 2>&1
+    done
+    return 0
+}
+
 # Parse Named Tunnel config, output ingress as hostname|service per line
 parse_tunnel_ingress() {
     local config="${1:-$CLOUDFLARED_CONFIG}"
@@ -1337,6 +1361,7 @@ run_tunnel_manager() {
             echo "  [3] Create new (overwrite)"
             echo "  [4] Restart tunnel"
             echo "  [5] Re-apply DNS routes (fix 1033 error)"
+            echo "  [6] Fix DNS with API token (delete conflicting + re-apply)"
         else
             log_info "No Named Tunnel config found."
             echo ""
@@ -1371,10 +1396,11 @@ run_tunnel_manager() {
                     echo "${hostname}|${backend}" >> "$tmp_ingress"
                     write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_ingress"
                     rm -f "$tmp_ingress"
+                    [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$hostname" 2>/dev/null
                     if cloudflared tunnel route dns "$tunnel_name" "$hostname" --overwrite-dns 2>/dev/null; then
                         log_success "DNS route: $hostname -> $tunnel_name"
                     else
-                        log_warn "DNS route failed. Run manually: cloudflared tunnel route dns $tunnel_name $hostname --overwrite-dns"
+                        log_warn "DNS route failed. export CLOUDFLARE_API_TOKEN=your_token and retry, or delete record in Cloudflare DNS"
                     fi
                     systemctl restart cloudflared-tunnel 2>/dev/null || true
                     log_success "Added $hostname -> $backend"
@@ -1456,8 +1482,12 @@ run_tunnel_manager() {
                 ;;
             5)
                 if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -z "${CF_API_TOKEN:-}" ]]; then
+                        log_info "Tip: export CLOUDFLARE_API_TOKEN=your_token to auto-delete conflicting DNS records"
+                    fi
                     log_info "Applying DNS routes for all hostnames..."
                     while IFS='|' read -r h _; do
+                        [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$h" 2>/dev/null
                         local out
                         out=$(cloudflared tunnel route dns "$tunnel_name" "$h" --overwrite-dns 2>&1)
                         if [[ $? -eq 0 ]]; then
@@ -1468,7 +1498,29 @@ run_tunnel_manager() {
                         fi
                     done < <(parse_tunnel_ingress "$CLOUDFLARED_CONFIG")
                     echo "" >&2
-                    log_info "If DNS failed: ensure nagami.cloud is on Cloudflare, or add Public Hostname in Zero Trust dashboard"
+                    log_info "If DNS failed: export CLOUDFLARE_API_TOKEN then retry, or delete record in Cloudflare DNS"
+                fi
+                ;;
+            6)
+                if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
+                    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -z "${CF_API_TOKEN:-}" ]]; then
+                        prompt_read "Cloudflare API Token (Zone:DNS Edit): "
+                        CLOUDFLARE_API_TOKEN="${REPLY:-}"
+                        CLOUDFLARE_API_TOKEN=$(echo "$CLOUDFLARE_API_TOKEN" | xargs)
+                    fi
+                    if [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]]; then
+                        log_info "Deleting conflicting DNS records and re-applying..."
+                        while IFS='|' read -r h _; do
+                            cf_delete_dns_for_hostname "$h" 2>/dev/null && log_info "Deleted existing record: $h"
+                            if cloudflared tunnel route dns "$tunnel_name" "$h" --overwrite-dns 2>/dev/null; then
+                                log_success "DNS: $h -> $tunnel_name"
+                            else
+                                log_warn "DNS failed for $h"
+                            fi
+                        done < <(parse_tunnel_ingress "$CLOUDFLARED_CONFIG")
+                    else
+                        log_warn "API token required. Create at: Cloudflare Dashboard -> My Profile -> API Tokens (Zone:DNS Edit)"
+                    fi
                 fi
                 ;;
             *) log_warn "Invalid choice." ;;
