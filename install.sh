@@ -1138,45 +1138,28 @@ setup_named_tunnel() {
             log_warn "Auto-setup: tunnel create failed. Run manual steps above."
             [[ -n "$create_out" ]] && echo "$create_out" | head -5
         fi
-        if [[ -f "$credentials_path" ]]; then
-            [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$domain" 2>/dev/null
-            local ro
-            ro=$(cloudflared tunnel route dns --overwrite-dns "$tunnel_name" "$domain" 2>&1)
-            if [[ $? -eq 0 ]]; then
-                log_success "DNS route created: $domain -> $tunnel_name"
-            else
-                log_warn "DNS route failed: ${ro:-unknown}"
-                local tid2
-                tid2=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-                [[ -z "$tid2" && -f "$credentials_path" ]] && tid2=$(grep -oE '"TunnelID"[[:space:]]*:[[:space:]]*"[^"]*"|"t"[[:space:]]*:[[:space:]]*"[^"]*"' "$credentials_path" 2>/dev/null | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-                if [[ -n "$tid2" && -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" ]]; then
-                    cf_create_cname_for_hostname "$domain" "${tid2}.cfargotunnel.com" 2>/dev/null && log_success "DNS CNAME via API" || log_info "Try: cloudflared tunnel route dns --overwrite-dns $tunnel_name $domain"
-                else
-                    log_info "Try: cloudflared tunnel route dns --overwrite-dns $tunnel_name $domain"
-                fi
-            fi
-        fi
     fi
 
-    # Always run route dns when credentials exist (uses tunnel login cert, no API token needed)
+    # Setup DNS when credentials exist: API first (if token), else run_route_dns
     if [[ -f "$credentials_path" ]]; then
-        [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$domain" 2>/dev/null
-        local route_out
-        route_out=$(cloudflared tunnel route dns --overwrite-dns "$tunnel_name" "$domain" 2>&1)
-        local route_ret=$?
-        if [[ $route_ret -eq 0 ]]; then
+        if [[ -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" ]]; then
+            cf_delete_dns_for_hostname "$domain" 2>/dev/null
+            local tid
+            tid=$(get_tunnel_id "$tunnel_name" "$credentials_path")
+            if [[ -n "$tid" ]] && cf_create_cname_for_hostname "$domain" "${tid}.cfargotunnel.com" 2>/dev/null; then
+                log_success "DNS route: $domain -> $tunnel_name (via API)"
+            elif run_route_dns "$tunnel_name" "$domain"; then
+                log_success "DNS route: $domain -> $tunnel_name"
+            else
+                log_warn "DNS failed. Try: cloudflared tunnel route dns $tunnel_name $domain"
+            fi
+        elif run_route_dns "$tunnel_name" "$domain"; then
             log_success "DNS route: $domain -> $tunnel_name"
         else
-            log_warn "DNS route failed: ${route_out:-unknown error}"
-            local tid
-            tid=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-            [[ -z "$tid" && -f "$credentials_path" ]] && tid=$(grep -oE '"TunnelID"[[:space:]]*:[[:space:]]*"[a-f0-9-]+"' "$credentials_path" 2>/dev/null | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-            [[ -z "$tid" && -f "$credentials_path" ]] && tid=$(grep -oE '"t"[[:space:]]*:[[:space:]]*"[a-f0-9-]+"' "$credentials_path" 2>/dev/null | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-            if [[ -n "$tid" && -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" ]]; then
-                cf_create_cname_for_hostname "$domain" "${tid}.cfargotunnel.com" 2>/dev/null && log_success "DNS CNAME via API: $domain" || log_info "Try: cloudflared tunnel route dns --overwrite-dns $tunnel_name $domain"
-            else
-                log_info "Try: cloudflared tunnel route dns --overwrite-dns $tunnel_name $domain"
-            fi
+            log_warn "DNS failed. Try manually:"
+            log_info "  cloudflared tunnel route dns $tunnel_name $domain"
+            log_info "  (if record exists: add --overwrite-dns at the end)"
+            log_info "Or use API token (Zone:DNS Edit) and retry Switch Mode."
         fi
     fi
 
@@ -1195,7 +1178,7 @@ setup_named_tunnel() {
         log_info "Named tunnel - run these steps:"
         log_info "  1. cloudflared tunnel login     (opens browser, creates cert.pem for tunnel list/create)"
         log_info "  2. cloudflared tunnel create $tunnel_name"
-        log_info "  3. cloudflared tunnel route dns --overwrite-dns $tunnel_name $domain"
+        log_info "  3. cloudflared tunnel route dns $tunnel_name $domain"
         log_info "  4. cp /root/.cloudflared/*.json $credentials_path"
         log_info "  5. systemctl start cloudflared-tunnel"
     fi
@@ -1240,7 +1223,7 @@ EOF
         log_info "Required steps (run in order):" >&2
         log_info "  1. cloudflared tunnel login     (opens browser, creates cert.pem for tunnel list/create)" >&2
         log_info "  2. cloudflared tunnel create $tunnel_name" >&2
-        log_info "  3. cloudflared tunnel route dns --overwrite-dns $tunnel_name $domain" >&2
+        log_info "  3. cloudflared tunnel route dns $tunnel_name $domain" >&2
         log_info "  4. cp /root/.cloudflared/*.json $credentials_path" >&2
         log_info "  5. systemctl start cloudflared-tunnel" >&2
         log_info "Config saved to $CLOUDFLARED_CONFIG" >&2
@@ -1303,6 +1286,32 @@ run_create_ssl_cert() {
     echo "  Private key: $key_path"
     echo ""
     log_info "For Wings: ensure config.yml ssl paths point to these files."
+}
+
+# Get tunnel UUID from tunnel list or credentials file
+get_tunnel_id() {
+    local tunnel_name="$1"
+    local creds_path="${2:-/etc/cloudflared/${tunnel_name}.json}"
+    local tid
+    tid=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+    [[ -z "$tid" && -f "$creds_path" ]] && tid=$(grep -oE '"TunnelID"[[:space:]]*:[[:space:]]*"[^"]*"|"t"[[:space:]]*:[[:space:]]*"[^"]*"' "$creds_path" 2>/dev/null | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+    echo "$tid"
+}
+
+# Try multiple route dns syntaxes for different cloudflared versions
+run_route_dns() {
+    local tunnel="$1" hostname="$2"
+    cloudflared tunnel route dns "$tunnel" "$hostname" 2>/dev/null && return 0
+    cloudflared tunnel route dns "$tunnel" "$hostname" --overwrite-dns 2>/dev/null && return 0
+    cloudflared tunnel route dns "$tunnel" "$hostname" -f 2>/dev/null && return 0
+    local tid
+    tid=$(get_tunnel_id "$tunnel")
+    if [[ -n "$tid" ]]; then
+        cloudflared tunnel route dns "$tid" "$hostname" 2>/dev/null && return 0
+        cloudflared tunnel route dns "$tid" "$hostname" --overwrite-dns 2>/dev/null && return 0
+    fi
+    cloudflared route dns "$tunnel" "$hostname" 2>/dev/null && return 0
+    return 1
 }
 
 # Delete Cloudflare DNS record for hostname (needs API token) - resolves "record already exists"
@@ -1476,10 +1485,20 @@ run_tunnel_manager() {
                     write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_ingress"
                     rm -f "$tmp_ingress"
                     [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$hostname" 2>/dev/null
-                    if cloudflared tunnel route dns --overwrite-dns "$tunnel_name" "$hostname" 2>/dev/null; then
+                    if [[ -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" ]]; then
+                        local tid_add
+                        tid_add=$(get_tunnel_id "$tunnel_name" "$creds_path")
+                        if [[ -n "$tid_add" ]] && cf_create_cname_for_hostname "$hostname" "${tid_add}.cfargotunnel.com" 2>/dev/null; then
+                            log_success "DNS: $hostname (via API)"
+                        elif run_route_dns "$tunnel_name" "$hostname"; then
+                            log_success "DNS route: $hostname -> $tunnel_name"
+                        else
+                            log_warn "DNS failed. Try: cloudflared tunnel route dns $tunnel_name $hostname"
+                        fi
+                    elif run_route_dns "$tunnel_name" "$hostname"; then
                         log_success "DNS route: $hostname -> $tunnel_name"
                     else
-                        log_warn "DNS route failed. export CLOUDFLARE_API_TOKEN=your_token and retry, or delete record in Cloudflare DNS"
+                        log_warn "DNS failed. Try: cloudflared tunnel route dns $tunnel_name $hostname"
                     fi
                     systemctl restart cloudflared-tunnel 2>/dev/null || true
                     log_success "Added $hostname -> $backend"
@@ -1565,19 +1584,20 @@ run_tunnel_manager() {
                         log_info "Tip: export CLOUDFLARE_API_TOKEN=your_token to auto-delete conflicting DNS records"
                     fi
                     log_info "Applying DNS routes for all hostnames..."
+                    local tid_ra
+                    tid_ra=$(get_tunnel_id "$tunnel_name" "$creds_path")
                     while IFS='|' read -r h _; do
                         [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$h" 2>/dev/null
-                        local out
-                        out=$(cloudflared tunnel route dns --overwrite-dns "$tunnel_name" "$h" 2>&1)
-                        if [[ $? -eq 0 ]]; then
+                        if [[ -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" && -n "$tid_ra" ]] && cf_create_cname_for_hostname "$h" "${tid_ra}.cfargotunnel.com" 2>/dev/null; then
+                            log_success "DNS: $h (via API)"
+                        elif run_route_dns "$tunnel_name" "$h"; then
                             log_success "DNS: $h -> $tunnel_name"
                         else
-                            log_warn "DNS failed for $h"
-                            [[ -n "$out" ]] && echo "    $out" >&2
+                            log_warn "DNS failed for $h. Try: cloudflared tunnel route dns $tunnel_name $h"
                         fi
                     done < <(parse_tunnel_ingress "$CLOUDFLARED_CONFIG")
                     echo "" >&2
-                    log_info "If DNS failed: export CLOUDFLARE_API_TOKEN then retry, or delete record in Cloudflare DNS"
+                    log_info "If DNS failed: export CLOUDFLARE_API_TOKEN then retry option 5 or 6."
                 fi
                 ;;
             6)
@@ -1589,9 +1609,13 @@ run_tunnel_manager() {
                     fi
                     if [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]]; then
                         log_info "Deleting conflicting DNS records and re-applying..."
+                        local tid_fix
+                        tid_fix=$(get_tunnel_id "$tunnel_name" "$creds_path")
                         while IFS='|' read -r h _; do
                             cf_delete_dns_for_hostname "$h" 2>/dev/null && log_info "Deleted existing record: $h"
-                            if cloudflared tunnel route dns --overwrite-dns "$tunnel_name" "$h" 2>/dev/null; then
+                            if [[ -n "$tid_fix" ]] && cf_create_cname_for_hostname "$h" "${tid_fix}.cfargotunnel.com" 2>/dev/null; then
+                                log_success "DNS: $h (via API)"
+                            elif run_route_dns "$tunnel_name" "$h"; then
                                 log_success "DNS: $h -> $tunnel_name"
                             else
                                 log_warn "DNS failed for $h"

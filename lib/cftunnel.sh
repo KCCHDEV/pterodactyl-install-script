@@ -145,6 +145,29 @@ setup_named_tunnel() {
 
     mkdir -p /etc/cloudflared
 
+    get_tunnel_id() {
+        local tn="$1"
+        local cp="${2:-/etc/cloudflared/${tn}.json}"
+        local tid
+        tid=$(cloudflared tunnel list 2>/dev/null | grep -w "$tn" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+        [[ -z "$tid" && -f "$cp" ]] && tid=$(grep -oE '"TunnelID"[[:space:]]*:[[:space:]]*"[^"]*"|"t"[[:space:]]*:[[:space:]]*"[^"]*"' "$cp" 2>/dev/null | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+        echo "$tid"
+    }
+    run_route_dns() {
+        local tunnel="$1" hostname="$2"
+        cloudflared tunnel route dns "$tunnel" "$hostname" 2>/dev/null && return 0
+        cloudflared tunnel route dns "$tunnel" "$hostname" --overwrite-dns 2>/dev/null && return 0
+        cloudflared tunnel route dns "$tunnel" "$hostname" -f 2>/dev/null && return 0
+        local tid
+        tid=$(get_tunnel_id "$tunnel")
+        if [[ -n "$tid" ]]; then
+            cloudflared tunnel route dns "$tid" "$hostname" 2>/dev/null && return 0
+            cloudflared tunnel route dns "$tid" "$hostname" --overwrite-dns 2>/dev/null && return 0
+        fi
+        cloudflared route dns "$tunnel" "$hostname" 2>/dev/null && return 0
+        return 1
+    }
+
     # Auto-setup: if user has logged in, run create + route dns automatically
     local cert_locations=("/root/.cloudflared/cert.pem" "/etc/cloudflared/cert.pem")
     local has_login=""
@@ -175,14 +198,10 @@ setup_named_tunnel() {
             [[ -n "$create_out" ]] && echo "$create_out" | head -5
         fi
         if [[ -f "$credentials_path" ]]; then
-            if cloudflared tunnel route dns "$tunnel_name" "$domain"; then
+            if run_route_dns "$tunnel_name" "$domain"; then
                 log_success "DNS route created: $domain -> $tunnel_name"
             else
-                if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns; then
-                    log_success "DNS route created: $domain -> $tunnel_name"
-                else
-                    log_warn "Auto-setup: route dns failed. Ensure domain $domain is in Cloudflare."
-                fi
+                log_warn "DNS failed. Try: cloudflared tunnel route dns $tunnel_name $domain"
             fi
         fi
     fi
