@@ -1140,7 +1140,13 @@ setup_named_tunnel() {
             if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns 2>/dev/null; then
                 log_success "DNS route created: $domain -> $tunnel_name"
             else
-                log_warn "DNS route failed. Set CLOUDFLARE_API_TOKEN and retry, or delete existing record in Cloudflare DNS manually."
+                local tid2
+                tid2=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+                if [[ -n "$tid2" && -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" ]]; then
+                    cf_create_cname_for_hostname "$domain" "${tid2}.cfargotunnel.com" 2>/dev/null && log_success "DNS CNAME created via API" || log_warn "DNS failed. Set CLOUDFLARE_API_TOKEN (Zone:DNS Edit) and retry."
+                else
+                    log_warn "DNS failed. Set CLOUDFLARE_API_TOKEN and retry, or delete existing record in Cloudflare DNS manually."
+                fi
             fi
         fi
     fi
@@ -1151,7 +1157,17 @@ setup_named_tunnel() {
         if cloudflared tunnel route dns "$tunnel_name" "$domain" --overwrite-dns 2>/dev/null; then
             log_success "DNS route: $domain -> $tunnel_name"
         else
-            log_warn "DNS route failed. Use Tunnel Manager [6] with API token, or: cloudflared tunnel route dns $tunnel_name $domain --overwrite-dns"
+            local tid
+            tid=$(cloudflared tunnel list 2>/dev/null | grep -w "$tunnel_name" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+            if [[ -n "$tid" && -n "${CLOUDFLARE_API_TOKEN:-}${CF_API_TOKEN:-}" ]]; then
+                if cf_create_cname_for_hostname "$domain" "${tid}.cfargotunnel.com" 2>/dev/null; then
+                    log_success "DNS CNAME created via API: $domain -> ${tid}.cfargotunnel.com"
+                else
+                    log_warn "DNS failed. Ensure domain $domain is on Cloudflare and API token has Zone:DNS Edit. Run: cloudflared tunnel route dns $tunnel_name $domain --overwrite-dns"
+                fi
+            else
+                log_warn "DNS failed. Use Tunnel Manager [8] option 6 with API token, or run: cloudflared tunnel route dns $tunnel_name $domain --overwrite-dns"
+            fi
         fi
     fi
 
@@ -1305,6 +1321,30 @@ cf_delete_dns_for_hostname() {
         curl -sS -X DELETE -H "Authorization: Bearer $token" "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records/$rid" >/dev/null 2>&1
     done
     return 0
+}
+
+# Create CNAME via Cloudflare API (fallback when route dns fails)
+cf_create_cname_for_hostname() {
+    local hostname="$1"
+    local target="$2"   # e.g. <tunnel-id>.cfargotunnel.com
+    local token="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-}}"
+    [[ -z "$token" || -z "$target" ]] && return 1
+    local domain
+    domain=$(echo "$hostname" | sed 's/^[^.]*\.//')
+    [[ -z "$domain" ]] && return 1
+    local zone_id
+    zone_id=$(curl -sS -H "Authorization: Bearer $token" "https://api.cloudflare.com/client/v4/zones?name=$domain" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
+    [[ -z "$zone_id" ]] && return 1
+    local name_part="${hostname%%.$domain}"
+    [[ "$name_part" == "$hostname" || -z "$name_part" ]] && name_part="$hostname"
+    local resp
+    resp=$(curl -sS -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+        "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" \
+        -d "{\"type\":\"CNAME\",\"name\":\"$name_part\",\"content\":\"$target\",\"ttl\":1,\"proxied\":false}" 2>/dev/null)
+    if echo "$resp" | grep -q '"success":true'; then
+        return 0
+    fi
+    return 1
 }
 
 # Parse Named Tunnel config, output ingress as hostname|service per line
@@ -1621,47 +1661,24 @@ switch_to_tunnel() {
 
     if [[ "$CF_TUNNEL_TYPE" == "b" ]]; then
         local new_url="https://${FQDN}"
-        local tunnel_name creds_path
-        if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
-            tunnel_name=$(grep "^tunnel:" "$CLOUDFLARED_CONFIG" 2>/dev/null | sed 's/tunnel:[[:space:]]*//' | head -1)
-            creds_path=$(grep "credentials-file:" "$CLOUDFLARED_CONFIG" 2>/dev/null | sed 's/credentials-file:[[:space:]]*//' | head -1)
-            creds_path="${creds_path:-/etc/cloudflared/pterodactyl-panel.json}"
-            if [[ -n "$tunnel_name" && -f "$creds_path" ]]; then
-                local has_fqdn=""
-                while IFS='|' read -r h _; do [[ "$h" == "$FQDN" ]] && has_fqdn=1; done < <(parse_tunnel_ingress "$CLOUDFLARED_CONFIG")
-                if [[ -z "$has_fqdn" ]]; then
-                    log_info "Adding $FQDN to existing tunnel..." >&2
-                    local tmp_add="/tmp/tunnel-add-$$.txt"
-                    parse_tunnel_ingress "$CLOUDFLARED_CONFIG" > "$tmp_add"
-                    echo "${FQDN}|http://127.0.0.1:80" >> "$tmp_add"
-                    write_tunnel_config "$tunnel_name" "$creds_path" "$tmp_add"
-                    rm -f "$tmp_add"
-                fi
-                write_cloudflared_service "$tunnel_name"
-                systemctl enable cloudflared-tunnel 2>/dev/null || true
-                [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CF_API_TOKEN:-}" ]] && cf_delete_dns_for_hostname "$FQDN" 2>/dev/null
-                if cloudflared tunnel route dns "$tunnel_name" "$FQDN" --overwrite-dns 2>/dev/null; then
-                    log_success "DNS route: $FQDN -> $tunnel_name" >&2
-                else
-                    log_warn "DNS route failed. Use Tunnel Manager [6] with API token" >&2
-                fi
-                systemctl restart cloudflared-tunnel 2>/dev/null || true
-                NAMED_TUNNEL_READY=1
-            fi
+        if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -z "${CF_API_TOKEN:-}" ]]; then
+            echo "" >&2
+            log_info "Cloudflare API token (Zone:DNS Edit) helps create DNS automatically." >&2
+            prompt_read "Paste API token (or Enter to skip): "
+            [[ -n "${REPLY:-}" ]] && export CLOUDFLARE_API_TOKEN="${REPLY}"
         fi
-        if [[ "${NAMED_TUNNEL_READY:-0}" != "1" ]]; then
-            NAMED_TUNNEL_READY=0
-            setup_named_tunnel "pterodactyl-panel" "$FQDN"
-        fi
+        pkill -f "cloudflared tunnel" 2>/dev/null || true
+        sleep 1
+        log_info "Creating tunnel and DNS for $FQDN..." >&2
+        setup_named_tunnel "pterodactyl-panel" "$FQDN"
         sed -i "s|APP_URL=.*|APP_URL=$new_url|" "$PANEL_PATH/.env" 2>/dev/null || true
         update_settings_mode "1" "$new_url" "b" "" "" "$FQDN"
         update_wings_remote "$new_url" ""
         sudo -u www-data php "$PANEL_PATH/artisan" config:clear 2>/dev/null || true
         if [[ "${NAMED_TUNNEL_READY:-0}" == "1" ]]; then
-            log_success "Named tunnel. Panel URL: $new_url" >&2
+            log_success "Named tunnel ready. Panel: $new_url" >&2
         else
-            log_warn "Complete the 5 steps above before the panel will be reachable" >&2
-            log_info "Panel URL (after completing steps): $new_url" >&2
+            log_warn "Complete manual steps above. Panel: $new_url" >&2
         fi
     else
         local tunnel_url
